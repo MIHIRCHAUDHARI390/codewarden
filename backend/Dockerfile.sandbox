@@ -1,0 +1,9 @@
+# Sandbox image: patched code and tests only ever run inside this.
+# Dependencies are baked in because the container has no network at run time.
+FROM python:3.12.7-slim
+
+RUN pip install --no-cache-dir pytest==8.3.3 pyyaml==6.0.2
+
+RUN useradd --create-home --uid 1000 sandbox
+USER sandbox
+WORKDIR /work
