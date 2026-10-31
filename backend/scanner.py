@@ -1,20 +1,12 @@
-"""Scanner agent: runs static tools and turns their output into Finding objects.
-
-Tools: Bandit (SQLi, command injection, deserialization, passwords),
-a regex secret detector, a small AST rule for path traversal, and pip-audit.
-"""
 import ast
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
-
 from packaging.version import Version
-
 from schemas import Finding
 
-# Bandit test id -> our vulnerability class
 BANDIT_MAP = {
     "B608": "sql_injection",
     "B602": "command_injection",
@@ -30,16 +22,13 @@ BANDIT_MAP = {
 }
 
 SECRET_PATTERNS = [
-    # name = "long literal", e.g. API_KEY = "abcd1234..."
     re.compile(r"""(?i)\b\w*(api_?key|secret|token|passw(or)?d|access_?key)\w*\s*=\s*["']([^"']{8,})["']"""),
-    re.compile(r"""["'](AKIA[0-9A-Z]{16})["']"""),       # AWS access key id
-    re.compile(r"""["'](ghp_[A-Za-z0-9]{36})["']"""),     # GitHub token
-    re.compile(r"""["'](sk-[A-Za-z0-9_-]{20,})["']"""),   # generic "sk-" API keys
+    re.compile(r"""["'](AKIA[0-9A-Z]{16})["']"""),     
+    re.compile(r"""["'](ghp_[A-Za-z0-9]{36})["']"""),    
+    re.compile(r"""["'](sk-[A-Za-z0-9_-]{20,})["']"""),  
 ]
 
-# If a function calls one of these, we assume it checks the path.
 PATH_GUARDS = ("resolve(", "realpath(", "abspath(", "is_relative_to(", "commonpath(")
-
 
 def scan(root: Path, files: list[str]) -> list[Finding]:
     """Scan the given files (paths relative to root)."""
@@ -57,6 +46,7 @@ def scan(root: Path, files: list[str]) -> list[Finding]:
 
 
 def run_bandit(root: Path, files: list[str]) -> list[Finding]:
+    """Run Bandit on the given Python files and return findings."""
     proc = subprocess.run(
         [sys.executable, "-m", "bandit", "-f", "json", "-q", *files],
         cwd=root, capture_output=True, text=True,
@@ -83,6 +73,7 @@ def run_bandit(root: Path, files: list[str]) -> list[Finding]:
 
 
 def find_secrets(file: str, text: str) -> list[Finding]:
+    """Detect hardcoded secrets and API keys via regex."""
     findings = []
     for n, line in enumerate(text.splitlines(), start=1):
         if line.lstrip().startswith("#") or "environ" in line or "getenv" in line:
@@ -99,7 +90,7 @@ def find_secrets(file: str, text: str) -> list[Finding]:
 
 
 def find_path_traversal(file: str, text: str) -> list[Finding]:
-    """Flag open(os.path.join(BASE, x)) / open(BASE + x) / open(f"..{x}")
+    """Flag open(os.path.join(BASE, x)) / open(BASE + x) / open(f"...{x}")
     inside a function that never checks the resulting path."""
     try:
         tree = ast.parse(text)
@@ -126,7 +117,8 @@ def find_path_traversal(file: str, text: str) -> list[Finding]:
 
 def _is_open(call: ast.Call) -> bool:
     f = call.func
-    return (isinstance(f, ast.Name) and f.id == "open") or (isinstance(f, ast.Attribute) and f.attr in ("open", "send_file"))
+    return (isinstance(f, ast.Name) and f.id == "open") or \
+           (isinstance(f, ast.Attribute) and f.attr in ("open", "send_file"))
 
 
 def _is_built_path(arg: ast.expr) -> bool:
@@ -138,6 +130,7 @@ def _is_built_path(arg: ast.expr) -> bool:
 
 
 def run_pip_audit(root: Path) -> list[Finding]:
+    """Run pip-audit on requirements.txt and return dependency findings."""
     req = root / "requirements.txt"
     proc = subprocess.run(
         [sys.executable, "-m", "pip_audit", "-r", str(req), "--no-deps", "--disable-pip",
