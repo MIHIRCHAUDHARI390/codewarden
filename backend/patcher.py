@@ -86,7 +86,10 @@ def generate_patch(finding: Finding, original: str, attempt: int,
     if existing:
         parts.append(existing)
     if feedback:
-        parts.append(f"\nVerifier feedback (previous attempt rejected):\n{json.dumps(feedback)}")
+        # Feedback may carry a raw unified diff (e.g. from prepare_review_retry_node
+        # or the verifier). Redact it so real secrets never reach the third-party LLM.
+        safe_feedback, _ = redact(json.dumps(feedback))
+        parts.append(f"\nVerifier feedback (previous attempt rejected):\n{safe_feedback}")
 
     hint = FIX_HINTS.get(finding.vuln_class, "")
     if hint:
