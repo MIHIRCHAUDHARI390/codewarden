@@ -1,0 +1,37 @@
+{
+  "name": "codewarden",
+  "displayName": "CodeWarden Security Guard",
+  "description": "Scans Python code for security bugs and proposes sandbox-verified patches.",
+  "version": "0.1.0",
+  "publisher": "codewarden",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Linters"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onLanguage:python", "workspaceContains:requirements.txt"],
+  "contributes": {
+    "commands": [
+      { "command": "securityGuard.scanFile", "title": "Security Guard: Scan File" },
+      { "command": "securityGuard.scanWorkspace", "title": "Security Guard: Scan Workspace" },
+      { "command": "securityGuard.generatePatch", "title": "Security Guard: Generate Verified Patch" }
+    ],
+    "configuration": {
+      "title": "Security Guard",
+      "properties": {
+        "securityGuard.backendUrl": { "type": "string", "default": "http://127.0.0.1:8765" },
+        "securityGuard.scanOnSave": { "type": "boolean", "default": true },
+        "securityGuard.model": { "type": "string", "default": "", "description": "Mistral model id. Empty = backend default (mistral-large-4)." },
+        "securityGuard.maxRetries": { "type": "number", "default": 3 },
+        "securityGuard.severityThreshold": { "type": "string", "enum": ["low", "medium", "high", "critical"], "default": "low" }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
