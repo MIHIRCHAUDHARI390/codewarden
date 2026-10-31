@@ -1,4 +1,7 @@
-# VULN: hardcoded secret (fake value, for the demo only)
-API_TOKEN = "demo-4f9a8b7c6d5e4f3a2b1c"
+import os
+
+API_TOKEN = os.environ.get("API_TOKEN", "")
+
+
 def auth_header():
     return {"Authorization": "Bearer " + API_TOKEN}

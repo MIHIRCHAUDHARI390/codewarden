@@ -2,6 +2,7 @@ import subprocess
 
 
 def count_lines(filename):
-    # VULN: command injection (user input goes into a shell command)
-    out = subprocess.check_output("wc -l < " + filename, shell=True)
-    return int(out.strip())
+    # Count lines without invoking a shell, so the filename can never be
+    # interpreted as shell metacharacters (command injection).
+    out = subprocess.check_output(["wc", "-l", filename])
+    return int(out.strip().split()[0])

@@ -10,6 +10,5 @@ def make_db():
 
 
 def find_user(conn, name):
-    # VULN: SQL injection (string formatting into the query)
-    query = "SELECT name, email FROM users WHERE name = '%s'" % name
-    return conn.execute(query).fetchall()
+    query = "SELECT name, email FROM users WHERE name = ?"
+    return conn.execute(query, (name,)).fetchall()
