@@ -18,9 +18,9 @@ const PATCHED_SCHEME = "codewarden-patched";
 
 const diagnostics = vscode.languages.createDiagnosticCollection("securityGuard");
 const output = vscode.window.createOutputChannel("Security Guard");
-const findings = new Map<string, Finding>();          // finding id -> finding
-const scannedText = new Map<string, string>();        // file uri -> text that was scanned
-const patchedDocs = new Map<string, string>();        // virtual uri -> patched content
+const findings = new Map<string, Finding>();
+const scannedText = new Map<string, string>();
+const patchedDocs = new Map<string, string>();
 let statusBar: vscode.StatusBarItem;
 
 export function activate(context: vscode.ExtensionContext) {
@@ -82,62 +82,52 @@ async function scanDocuments(docs: vscode.TextDocument[]) {
       scannedText.set(d.uri.toString(), d.getText());
     }
     const byFile = new Map<string, vscode.Diagnostic[]>();
-    for (const f of res.findings as Finding[]) {
+    for (const f of res.findings) {
       if (SEVERITY_RANK[f.severity] < threshold) continue;
-      findings.set(f.id, f);
-      const diag = new vscode.Diagnostic(
-        new vscode.Range(f.line_start - 1, 0, f.line_end - 1, Number.MAX_SAFE_INTEGER),
-        `[${f.severity}] ${f.class.replace(/_/g, " ")}: ${f.message}`,
-        f.severity === "critical" || f.severity === "high" ? vscode.DiagnosticSeverity.Error
-          : f.severity === "medium" ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Information,
-      );
+      const uri = vscode.Uri.joinPath(folder.uri, f.file);
+      const range = new vscode.Range(f.line_start - 1, 0, f.line_end - 1, 1000);
+      const diag = new vscode.Diagnostic(range, `${f.message} (${f.class})`, toSeverity(f.severity));
       diag.source = "Security Guard";
       diag.code = f.id;
-      byFile.set(f.file, [...(byFile.get(f.file) ?? []), diag]);
+      byFile.set(uri.toString(), [...(byFile.get(uri.toString()) ?? []), diag]);
+      findings.set(f.id, f);
     }
-    for (const [file, diags] of byFile) {
-      diagnostics.set(vscode.Uri.joinPath(folder.uri, file), diags);
+    for (const [uriStr, diags] of byFile) {
+      diagnostics.set(vscode.Uri.parse(uriStr), diags);
     }
-    setStatus(res.findings.length ? `${res.findings.length} issue(s)` : "clean");
+    vscode.window.showInformationMessage(`Security Guard: ${res.findings.length} finding(s).`);
   } catch (e) {
     setStatus("error");
     vscode.window.showErrorMessage(`Security Guard scan failed: ${e}`);
-  }
-}
-
-// ---------------- Quick fix -> patch -> diff -> accept/decline ----------------
-
-function provideCodeActions(doc: vscode.TextDocument, _range: vscode.Range, ctx: vscode.CodeActionContext) {
-  return ctx.diagnostics
-    .filter((d) => d.source === "Security Guard")
-    .map((d) => {
-      const action = new vscode.CodeAction("Generate verified patch", vscode.CodeActionKind.QuickFix);
-      action.command = { command: "securityGuard.generatePatch", title: "Generate verified patch", arguments: [d.code, doc.uri] };
-      action.diagnostics = [d];
-      return action;
-    });
-}
-
-async function generatePatch(findingId?: string, fileUri?: vscode.Uri) {
-  if (!findingId || !fileUri) {
-    vscode.window.showInformationMessage("Use the lightbulb (Quick Fix) on a Security Guard warning.");
     return;
   }
-  const finding = findings.get(findingId);
+  setStatus("idle");
+}
+
+// ---------------- Patching ----------------
+
+async function generatePatch() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return;
+  const diag = editor.selections.length
+    ? diagnostics.get(editor.document.uri)?.find((d) => d.range.contains(editor.selection.start))
+    : diagnostics.get(editor.document.uri)?.[0];
+  if (!diag || typeof diag.code !== "string") {
+    vscode.window.showWarningMessage("No security finding on this line.");
+    return;
+  }
+  const finding = findings.get(diag.code as string);
   if (!finding) return;
+
+  const fileUri = editor.document.uri;
+  const folder = vscode.workspace.getWorkspaceFolder(fileUri)!;
+  const maxRetries = config().get<number>("maxRetries") ?? 3;
+  const model = config().get<string>("model") || undefined;
 
   setStatus("patching");
   let res: PatchResponse;
   try {
-    res = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "Security Guard: generating patch and verifying it in the sandbox…" },
-      () => post("/patch", {
-        run_id: finding.run_id,
-        finding_id: finding.id,
-        max_retries: config().get("maxRetries"),
-        model: config().get<string>("model") || null,
-      }),
-    );
+    res = await post("/patch", { run_id: finding.run_id, finding_id: finding.id, max_retries: maxRetries, model });
   } catch (e) {
     setStatus("error");
     vscode.window.showErrorMessage(`Security Guard patch failed: ${e}`);
@@ -150,7 +140,6 @@ async function generatePatch(findingId?: string, fileUri?: vscode.Uri) {
     return;
   }
 
-  // Show original vs patched in VS Code's diff editor.
   const patchedUri = vscode.Uri.from({ scheme: PATCHED_SCHEME, path: fileUri.path, query: finding.id });
   patchedDocs.set(patchedUri.toString(), res.patch.patched_content);
   await vscode.commands.executeCommand("vscode.diff", fileUri, patchedUri, `Security fix: ${finding.class.replace(/_/g, " ")}`);
@@ -197,6 +186,18 @@ async function accept(finding: Finding, fileUri: vscode.Uri, res: PatchResponse)
   vscode.window.showInformationMessage("Patch applied.");
 }
 
+// ---------------- Code Actions ----------------
+
+function provideCodeActions(document: vscode.TextDocument, range: vscode.Range): vscode.CodeAction[] {
+  const diags = diagnostics.get(document.uri)?.filter((d) => d.range.contains(range.start)) ?? [];
+  return diags.map((d) => {
+    const action = new vscode.CodeAction("Generate verified patch", vscode.CodeActionKind.QuickFix);
+    action.command = { command: "securityGuard.generatePatch", title: "Generate verified patch" };
+    action.diagnostics = [d];
+    return action;
+  });
+}
+
 // ---------------- Helpers ----------------
 
 async function post(path: string, body: unknown): Promise<any> {
@@ -216,6 +217,13 @@ function isScannable(uri: vscode.Uri) {
 
 function relPath(folder: vscode.WorkspaceFolder, uri: vscode.Uri) {
   return path.relative(folder.uri.fsPath, uri.fsPath).replace(/\\/g, "/");
+}
+
+function toSeverity(s: string): vscode.DiagnosticSeverity {
+  return s === "critical" ? vscode.DiagnosticSeverity.Error
+    : s === "high" ? vscode.DiagnosticSeverity.Error
+    : s === "medium" ? vscode.DiagnosticSeverity.Warning
+    : vscode.DiagnosticSeverity.Information;
 }
 
 function setStatus(text: string) {
