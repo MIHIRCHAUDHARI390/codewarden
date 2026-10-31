@@ -1,5 +1,4 @@
 """Patch agent: asks the LLM (Mistral) for a minimal fix plus a regression test.
-
 The LLM returns the full patched file as strict JSON; we build the unified diff
 ourselves with difflib, so we never have to trust an LLM-written diff.
 Dependency findings are fixed without the LLM (just bump the version).
@@ -10,16 +9,13 @@ import os
 import re
 import time
 from pathlib import Path
-
 import httpx
-
 from scanner import SECRET_PATTERNS
 from schemas import Explanation, Finding, Patch, RegressionTest
 
 MODEL = os.environ.get("CODEWARDEN_MODEL", "mistral-large-4")
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 
-# Standard fix and test idea for each class (spec section 10), given to the model as a hint.
 FIX_HINTS = {
     "sql_injection": "Fix: use a parameterized query, cursor.execute(sql, params). "
                      "Test: pass \"' OR '1'='1\" and assert no rows are returned.",
@@ -72,30 +68,54 @@ class PatchError(Exception):
     pass
 
 
-def generate_patch(finding: Finding, original: str, attempt: int, feedback: dict | None,
-                   model: str | None = None, project_root: str | None = None) -> Patch:
+def generate_patch(finding: Finding, original: str, attempt: int,
+                   feedback: dict | None = None, model: str | None = None,
+                   project_root: str = "") -> Patch:
+    """Generate a patch for a finding. Returns a Patch object."""
     if finding.vuln_class == "vulnerable_dependency":
         return bump_dependency(finding, original, attempt)
 
-    redacted, secrets = redact(original)
-    prompt = (
-        f"Vulnerability (JSON):\n{finding.model_dump_json(indent=2)}\n\n"
-        f"How this kind of bug is usually fixed: {FIX_HINTS[finding.vuln_class]}\n\n"
-        f'<file path="{finding.file}">\n{redacted}\n</file>\n'
-    )
-    if project_root:
-        prompt += existing_tests(project_root)
-    if feedback:
-        prompt += "\nYour previous attempt was rejected by the verifier:\n" + json.dumps(feedback, indent=2)
+    model = model or MODEL
+    redacted_original, secrets = redact(original)
 
-    data = call_llm(prompt, model or MODEL)
-    patched = unredact(data["patched_file"], secrets)
+    existing = existing_tests(project_root) if project_root else ""
+
+    parts = []
+    parts.append(f"<finding>\n{finding.model_dump_json()}\n</finding>")
+    parts.append(f"<file path=\"{finding.file}\">\n{redacted_original}\n</file>")
+    if existing:
+        parts.append(existing)
+    if feedback:
+        parts.append(f"\nVerifier feedback (previous attempt rejected):\n{json.dumps(feedback)}")
+
+    hint = FIX_HINTS.get(finding.vuln_class, "")
+    if hint:
+        parts.append(f"\nFix hint: {hint}")
+
+    user_prompt = "\n".join(parts)
+
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "patch", "schema": OUTPUT_SCHEMA, "strict": True},
+        },
+    }
+
+    data = call_llm(body, model)
+    patched_file = unredact(data["patched_file"], secrets)
+    test_code = data["test_code"]
+
     return Patch(
         finding_id=finding.id,
         attempt=attempt,
-        unified_diff=make_diff(finding.file, original, patched),
-        patched_content=patched,
-        regression_test=RegressionTest(path=f"tests/test_sec_{finding.id}.py", content=data["test_code"]),
+        unified_diff=make_diff(finding.file, original, patched_file),
+        patched_content=patched_file,
+        regression_test=RegressionTest(path=f"tests/test_sec_{finding.id}.py", content=test_code),
         explanation=Explanation(
             what_was_wrong=data["what_was_wrong"],
             why_it_matters=data["why_it_matters"],
@@ -103,36 +123,24 @@ def generate_patch(finding: Finding, original: str, attempt: int, feedback: dict
         ),
     )
 
-
-def call_llm(prompt: str, model: str) -> dict:
+def call_llm(body: dict, model: str) -> dict:
+    """Call Mistral API and return parsed JSON response."""
     key = os.environ.get("MISTRAL_API_KEY")
     if not key:
-        raise PatchError("MISTRAL_API_KEY is not set on the backend.")
-    body = {
-        "model": model,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        # Forces the answer to match OUTPUT_SCHEMA exactly.
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {"name": "patch", "schema": OUTPUT_SCHEMA, "strict": True},
-        },
-    }
+        raise PatchError("MISTRAL_API_KEY is not set.")
+
     for wait in (2, 5, 10, 0):
         response = httpx.post(MISTRAL_URL, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=180)
         if response.status_code != 429 or not wait:
             break
-        time.sleep(wait)  # free tier rate limit: wait and try again
+        time.sleep(wait) 
     if response.status_code != 200:
         raise PatchError(f"Mistral API error {response.status_code}: {response.text[:300]}")
     choice = response.json()["choices"][0]
     if choice["finish_reason"] == "length":
         raise PatchError("The model's answer was cut off (file too large?).")
     content = choice["message"]["content"]
-    if isinstance(content, list):  # some models return chunks (e.g. thinking + text)
+    if isinstance(content, list): 
         content = "".join(c.get("text", "") for c in content if c.get("type") == "text")
     try:
         return json.loads(content)
@@ -141,6 +149,7 @@ def call_llm(prompt: str, model: str) -> dict:
 
 
 def bump_dependency(finding: Finding, original: str, attempt: int) -> Patch:
+    """Fix a vulnerable dependency by bumping the version (no LLM needed)."""
     match = re.search(r"Fixed in (\S+)\.", finding.message)
     if not match:
         raise PatchError("No fixed version of this package exists yet.")
@@ -165,7 +174,7 @@ def bump_dependency(finding: Finding, original: str, attempt: int) -> Patch:
 
 
 def existing_tests(project_root: str, limit: int = 8000) -> str:
-    """The project's own tests, so the model knows what behaviour must not change."""
+    """The project tests, so the model knows what must not change."""
     text = ""
     for p in sorted(Path(project_root).glob("tests/**/*.py")):
         if not p.name.startswith("test_sec_"):

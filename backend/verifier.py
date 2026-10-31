@@ -1,4 +1,3 @@
-"""Verifier: plain code, no LLM. Decides if a patch is "verified" (spec section 8)."""
 import shutil
 import tempfile
 from collections import Counter
@@ -25,7 +24,7 @@ def verify(finding: Finding, patch: Patch, project_root: str, original: str) -> 
             if patch.regression_test:
                 write(d / patch.regression_test.path, patch.regression_test.content)
 
-        # 1. The file must not have changed on disk since it was scanned, and the patch must change something.
+        # 1. Patch applies cleanly to original file (no conflicts), and patch changes something.
         on_disk = (Path(project_root) / finding.file).read_text(encoding="utf-8")
         if on_disk != original:
             checks["patch_applies"] = "file_changed_since_scan"
@@ -34,7 +33,7 @@ def verify(finding: Finding, patch: Patch, project_root: str, original: str) -> 
         else:
             checks["patch_applies"] = "pass"
 
-        # 2. Syntax check (compile() only parses, it does not run the code).
+        # 2. Syntax check (compile only parses, does not run code).
         checks["syntax_ok"] = "pass"
         to_compile = [(finding.file, patch.patched_content)]
         if patch.regression_test:
@@ -47,7 +46,7 @@ def verify(finding: Finding, patch: Patch, project_root: str, original: str) -> 
                     checks["syntax_ok"] = "fail"
                     logs.append(f"[syntax] {path}: {e}")
 
-        # 3. Small diff that only touches the vulnerable file (plus the new test file).
+        # 3. Small diff that only touches the vulnerable file (plus new test file).
         changed = sum(1 for l in patch.unified_diff.splitlines()
                       if l[:1] in "+-" and not l.startswith(("+++", "---")))
         checks["diff_in_scope"] = "pass" if changed <= MAX_CHANGED_LINES else f"too_large ({changed} lines)"
@@ -61,7 +60,6 @@ def verify(finding: Finding, patch: Patch, project_root: str, original: str) -> 
             test = patch.regression_test.path
             code, out = pytest_in_sandbox(orig_dir, test)
             logs.append(f"[regression test on original]\n{out}")
-            # exit code 1 = tests ran and failed; anything else (import error etc.) is not a real demo
             checks["regression_test_before"] = "fail_as_expected" if code == 1 else "did_not_fail" if code == 0 else f"error (exit {code})"
             code, out = pytest_in_sandbox(patched_dir, test)
             logs.append(f"[regression test on patched]\n{out}")

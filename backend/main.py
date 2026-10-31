@@ -1,4 +1,3 @@
-"""FastAPI backend. Run with:  uvicorn main:app --port 8765"""
 import os
 import shutil
 import subprocess
@@ -36,7 +35,7 @@ def scan_files(req: ScanRequest):
         for path, content in files.items():
             (tmp / path).parent.mkdir(parents=True, exist_ok=True)
             (tmp / path).write_text(content, encoding="utf-8")
-        findings = triage(scan(tmp, list(files)))
+        findings = triage(scan(tmp, list(files)), req.project_root)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -74,7 +73,7 @@ def get_run(run_id: str):
     run = db.get_run(run_id)
     if not run:
         raise HTTPException(404, "Unknown run_id")
-    run.pop("files")  # file contents are large; not needed here
+    run.pop("files")
     return run
 
 
