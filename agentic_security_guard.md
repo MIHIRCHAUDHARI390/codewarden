@@ -125,11 +125,11 @@ flowchart LR
 |---|---|---|
 | VS Code extension | Triggers, diagnostics, diff view, Accept/Decline, status | TypeScript, VS Code Extension API (`DiagnosticCollection`, `CodeActionProvider`, `vscode.diff`, `TextDocumentContentProvider`) |
 | Backend API | Receives scan requests, runs the agent graph, returns findings/patches | Python, FastAPI, Uvicorn |
-| Orchestrator | State machine controlling agent order, retries, loop limits, shared state | LangGraph (or plain Python state machine) |
-| Scanner agent | Runs static tools, runs LLM review for logic-level issues, normalizes output | Semgrep, Bandit, gitleaks, pip-audit, Claude API |
-| Triage agent | Dedupe, severity and exploitability scoring, false-positive filtering | Claude API plus rules |
-| Patch agent | Generates minimal diff plus explanation, uses verifier feedback on retries | Claude API |
-| Sandbox | Throwaway isolated container to apply the patch and run checks | Docker SDK for Python |
+| Orchestrator | State machine controlling agent order, retries, loop limits, shared state | LangGraph |
+| Scanner agent | Runs static tools, normalizes output | Bandit, regex secret detector, AST path-traversal rule, pip-audit, Mistral API |
+| Triage agent | Dedupe, severity and exploitability scoring, false-positive filtering | Rule-based (LLM pass optional) |
+| Patch agent | Generates minimal diff plus explanation, uses verifier feedback on retries | Mistral API |
+| Sandbox | Throwaway isolated container to apply the patch and run checks | subprocess + Docker CLI |
 | Verifier | Deterministic pass/fail gate based on evidence (not LLM opinion) | Python, pytest, scanners |
 | Report generator | Builds evidence summary and unified diff | Python |
 | Storage | Runs, findings, patches, decisions | SQLite |
@@ -162,7 +162,7 @@ flowchart LR
 - **Output:** `Patch` object (section 11).
 
 ### 7.4 Sandbox runner
-- Copies the project into a fresh container, applies the patch and the new test, runs the checks, returns structured results, destroys the container.
+- Copies the project into a fresh container, applies the patch and the new test, runs checks via `subprocess docker run` CLI, returns structured results, destroys the container.
 
 ### 7.5 Verifier
 - Pure code, no LLM judgment. Evaluates the checklist in section 8 and returns `pass` or `fail` with machine-readable reasons used as retry feedback.
@@ -188,10 +188,11 @@ Failure at any step returns a structured reason to the Patch agent, for example 
 ## 9. Sandbox specification
 
 - Docker container built from a pinned slim Python image.
-- **No network** (`network_mode="none"`).
+- Orchestrated via `subprocess` calls to the Docker CLI (`docker build`, `docker run`).
+- **No network** (`--network none`).
 - Resource limits: CPU (for example 1 core), memory (for example 512 MB), PIDs limit, execution timeout (for example 60 s).
-- Read-only base image; project copied into a writable temp volume, deleted afterward.
-- Run as a non-root user; drop capabilities.
+- Read-only base image (`--read-only`); project copied into a writable temp volume, deleted afterward.
+- Run as a non-root user (`--user 1000:1000`); drop capabilities (`--cap-drop ALL`, `--security-opt no-new-privileges`).
 - Dependencies for the target project must be pre-installed into a cached image layer (since there is no network at run time). For the MVP, use a prepared image per demo project.
 - Never execute the patch or tests on the host machine.
 - Optional optimization: pre-warmed container pool.
@@ -287,7 +288,7 @@ Failure at any step returns a structured reason to the Patch agent, for example 
 | `GET` | `/runs/{run_id}` | Run details and history |
 | `GET` | `/health` | Backend, Docker, and tools availability check |
 
-For long-running `/patch` calls, use a job id with polling (`GET /jobs/{id}`) or Server-Sent Events so the extension can show progress ("Generating patch… Running sandbox… Verifying…").
+Synchronous `/patch` for MVP; job polling (`GET /jobs/{id}`) or Server-Sent Events as stretch goal.
 
 ---
 
@@ -315,10 +316,10 @@ For long-running `/patch` calls, use a job id with polling (`GET /jobs/{id}`) or
 
 - **Extension:** TypeScript, VS Code Extension API, `yo code` generator.
 - **Backend:** Python 3.11+, FastAPI, Uvicorn, Pydantic.
-- **Agent framework:** LangGraph (or custom state machine).
-- **LLM:** Claude API via the Anthropic SDK (tool use, structured JSON output).
-- **Scanners:** Semgrep, Bandit, gitleaks, pip-audit.
-- **Sandbox:** Docker, Docker SDK for Python.
+- **Agent framework:** LangGraph.
+- **LLM:** Mistral API via `httpx` (structured JSON output).
+- **Scanners:** Bandit, regex secret detector, AST path-traversal rule, pip-audit (Semgrep and gitleaks as stretch goals).
+- **Sandbox:** Docker, `subprocess` calls to Docker CLI.
 - **Testing in sandbox:** pytest.
 - **Storage:** SQLite (SQLAlchemy or plain `sqlite3`).
 
