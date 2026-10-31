@@ -70,7 +70,7 @@ class PatchError(Exception):
 
 def generate_patch(finding: Finding, original: str, attempt: int,
                    feedback: dict | None = None, model: str | None = None,
-                   project_root: str = "") -> Patch:
+                   project_root: str = "", plan: dict[str, str] | None = None) -> Patch:
     """Generate a patch for a finding. Returns a Patch object."""
     if finding.vuln_class == "vulnerable_dependency":
         return bump_dependency(finding, original, attempt)
@@ -90,6 +90,9 @@ def generate_patch(finding: Finding, original: str, attempt: int,
         # or the verifier). Redact it so real secrets never reach the third-party LLM.
         safe_feedback, _ = redact(json.dumps(feedback))
         parts.append(f"\nVerifier feedback (previous attempt rejected):\n{safe_feedback}")
+
+    if plan:
+        parts.append(f"\nPlanner strategy:\n{json.dumps(plan, indent=2)}")
 
     hint = FIX_HINTS.get(finding.vuln_class, "")
     if hint:

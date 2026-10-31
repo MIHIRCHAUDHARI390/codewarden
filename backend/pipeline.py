@@ -1,17 +1,19 @@
 """Orchestrator: LangGraph state machine -- multi-agent patch pipeline.
 
 Agents (in order):
+  Planner agent  (planner.py)    -- analyses the finding, proposes a strategy
   Patch agent    (patcher.py)    -- generates a candidate fix + regression test
   Reviewer agent (reviewer.py)   -- independently critiques the patch (LLM)
   Verifier      (verifier.py)    -- deterministic 7-check gate in Docker
 
 Flow:
-  generate_patch -> review -> verify -> finalize
-                       | (critique) -> generate_patch (review retry)
-                       + (approve) -> verify
+  planner -> generate_patch -> review -> verify -> finalize
+                 | (critique) -> generate_patch (review retry)
+                 + (approve) -> verify
   verify retries -> generate_patch with verifier feedback (up to max_attempts)
 
 Nodes:
+  planner         -- Planner agent (Mistral LLM)
   generate_patch  -- Patch agent (Mistral LLM)
   review          -- Reviewer agent (Mistral LLM)
   verify          -- deterministic Verifier in Docker
@@ -21,6 +23,7 @@ Conditional edges after review:
   approved                 -> verify
   review retries remaining -> generate_patch (critique retry)
   no review retries left   -> escalate
+  error (response set)     -> END (return the stored response directly)
 
 Conditional edges after verify:
   verified                 -> finalize (return success)
@@ -33,6 +36,7 @@ from typing import TypedDict
 import db
 from langgraph.graph import END, StateGraph
 from patcher import PatchError, generate_patch
+from planner import PlannerError, plan_fix
 from reviewer import ReviewerError, review_patch
 from schemas import Evidence, Finding, Patch, PatchResponse, VerificationResult
 from verifier import feedback, verify
@@ -48,10 +52,30 @@ class PipelineState(TypedDict, total=False):
     max_review_attempts: int
     review_attempt: int
     review_approved: bool | None
+    review_approval_attempt: int | None
+    verify_attempts: int
+    plan: dict[str, str] | None
     patch: Patch | None
     verification: VerificationResult | None
     last_feedback: dict | None
     response: PatchResponse | None
+
+
+def planner_node(state: PipelineState) -> dict:
+    """Call the Planner agent to analyse the finding before patching.
+
+    Fails soft: if the Planner is unreachable we continue without a strategy so
+    the rest of the pipeline can still run.
+    """
+    finding = state["finding"]
+    original = state["original"]
+    model = state.get("model")
+    try:
+        plan = plan_fix(finding, original, model)
+    except PlannerError as e:
+        plan = {"root_cause": f"Planner unavailable: {e}",
+                "strategy": "", "pitfalls": ""}
+    return {"plan": plan}
 
 
 def generate_patch_node(state: PipelineState) -> dict:
@@ -62,9 +86,11 @@ def generate_patch_node(state: PipelineState) -> dict:
     original = state["original"]
     model = state.get("model")
     last_feedback = state.get("last_feedback")
+    plan = state.get("plan")
 
     try:
-        patch = generate_patch(finding, original, attempt, last_feedback, model, project_root)
+        patch = generate_patch(finding, original, attempt, last_feedback, model,
+                               project_root, plan)
     except PatchError as e:
         return {"attempt": attempt, "response": PatchResponse(verified=False, message=str(e))}
     return {"attempt": attempt, "patch": patch, "response": None}
@@ -91,8 +117,11 @@ def review_node(state: PipelineState) -> dict:
             "response": PatchResponse(verified=False, message=f"Reviewer error: {e}"),
         }
 
-    return {"review_attempt": review_attempt, "review_approved": approved,
-            "last_feedback": {"critique": critique, "reviewer": "review_agent"}}
+    out = {"review_attempt": review_attempt, "review_approved": approved,
+           "last_feedback": {"critique": critique, "reviewer": "review_agent"}}
+    if approved:
+        out["review_approval_attempt"] = review_attempt
+    return out
 
 
 def verify_node(state: PipelineState) -> dict:
@@ -104,7 +133,8 @@ def verify_node(state: PipelineState) -> dict:
 
     verification = verify(finding, patch, project_root, original)
     db.save_attempt(patch, verification)
-    return {"verification": verification}
+    return {"verification": verification,
+            "verify_attempts": state.get("verify_attempts", 0) + 1}
 
 
 def escalate_node(state: PipelineState) -> dict:
@@ -123,7 +153,7 @@ def escalate_node(state: PipelineState) -> dict:
 def route_after_review(state: PipelineState) -> str:
     """Conditional edge: decide what to do after the Reviewer agent."""
     if state.get("response") is not None:
-        return "end"  # generate_patch / review failed
+        return "error_end"  # generate_patch / review failed — return stored response
     if state.get("review_approved"):
         return "verify"
     if state.get("review_attempt", 0) < state.get("max_review_attempts", 2):
@@ -134,16 +164,16 @@ def route_after_review(state: PipelineState) -> str:
 def route_after_verify(state: PipelineState) -> str:
     """Conditional edge: decide what to do after verification."""
     if state.get("response") is not None:
-        return "end"  # generate_patch failed
+        return "error_end"  # defensive — return stored response directly
 
     verification = state["verification"]
     if verification.verified:
-        return "end"  # success – build response in finalize
+        return "success_end"  # success – build response in finalize
     if verification.checks.get("patch_applies") == "file_changed_since_scan":
-        return "end"  # file changed – stop
+        return "file_changed_end"  # file changed – stop
     if state["attempt"] < state.get("max_attempts", 3):
         return "verify_retry"  # retries left — generate_patch with feedback
-    return "escalate" # no retries – escalate
+    return "escalate"  # no retries – escalate
 
 
 def finalize_node(state: PipelineState) -> dict:
@@ -160,8 +190,13 @@ def finalize_node(state: PipelineState) -> dict:
                 finding_id=finding.id,
                 **patch.explanation.model_dump(),
                 checks_passed=[f"{k}: {v}" for k, v in verification.checks.items()],
-                verification={"verified": True, "attempt": attempt,
-                              "review_attempt": state.get("review_attempt", 0)},
+                verification={
+                    "verified": True,
+                    "attempt": attempt,
+                    "review_attempt": state.get("review_attempt", 0),
+                    "review_approval_attempt": state.get("review_approval_attempt"),
+                    "verify_attempts": state.get("verify_attempts", 0),
+                },
             ),
     )}
     # file_changed_since_scan
@@ -194,6 +229,7 @@ def prepare_review_retry_node(state: PipelineState) -> dict:
 def _build_graph():
     graph = StateGraph(PipelineState)
 
+    graph.add_node("planner", planner_node)
     graph.add_node("generate_patch", generate_patch_node)
     graph.add_node("review", review_node)
     graph.add_node("verify", verify_node)
@@ -202,19 +238,22 @@ def _build_graph():
     graph.add_node("prepare_review_retry", prepare_review_retry_node)
     graph.add_node("escalate", escalate_node)
 
-    graph.set_entry_point("generate_patch")
+    graph.set_entry_point("planner")
+    graph.add_edge("planner", "generate_patch")
     graph.add_edge("generate_patch", "review")
     graph.add_conditional_edges("review", route_after_review, {
         "verify": "verify",
         "review_retry": "prepare_review_retry",
         "escalate": "escalate",
-        "end": "finalize",
+        "error_end": END,
     })
     graph.add_edge("prepare_review_retry", "generate_patch")
     graph.add_conditional_edges("verify", route_after_verify, {
-        "end": "finalize",
+        "success_end": "finalize",
+        "file_changed_end": "finalize",
         "verify_retry": "prepare_retry",
         "escalate": "escalate",
+        "error_end": END,
     })
     graph.add_edge("prepare_retry", "generate_patch")
     graph.add_edge("finalize", END)
@@ -242,6 +281,9 @@ def patch_finding(finding: Finding, project_root: str, original: str,
         "max_review_attempts": max_review_attempts,
         "review_attempt": 0,
         "review_approved": None,
+        "review_approval_attempt": None,
+        "verify_attempts": 0,
+        "plan": None,
         "patch": None,
         "verification": None,
         "last_feedback": None,
