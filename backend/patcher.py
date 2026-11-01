@@ -113,6 +113,12 @@ def generate_patch(finding: Finding, original: str, attempt: int,
     }
 
     data = call_llm(body, model)
+
+    # Validate all required fields are present
+    missing = [k for k in ("patched_file", "test_code", "what_was_wrong", "why_it_matters", "what_changed") if k not in data]
+    if missing:
+        raise PatchError(f"LLM response missing required fields: {', '.join(missing)}")
+
     patched_file = unredact(data["patched_file"], secrets)
     test_code = data["test_code"]
 
