@@ -7,13 +7,89 @@
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Linters"],
   "main": "./out/extension.js",
-  "activationEvents": ["onLanguage:python", "workspaceContains:requirements.txt"],
+  "icon": "media/icon.png",
+  "activationEvents": [
+    "onLanguage:python",
+    "workspaceContains:requirements.txt",
+    "onView:codewarden.findingsView",
+    "onView:codewarden.statusView"
+  ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codewarden-sidebar",
+          "title": "CodeWarden",
+          "icon": "media/shield.svg"
+        }
+      ]
+    },
+    "views": {
+      "codewarden-sidebar": [
+        {
+          "id": "codewarden.findingsView",
+          "name": "Security Findings"
+        },
+        {
+          "id": "codewarden.statusView",
+          "name": "Guard Status"
+        }
+      ]
+    },
     "commands": [
-      { "command": "securityGuard.scanFile", "title": "Security Guard: Scan File" },
-      { "command": "securityGuard.scanWorkspace", "title": "Security Guard: Scan Workspace" },
-      { "command": "securityGuard.generatePatch", "title": "Security Guard: Generate Verified Patch" }
+      {
+        "command": "securityGuard.scanFile",
+        "title": "Security Guard: Scan Active File",
+        "category": "CodeWarden"
+      },
+      {
+        "command": "securityGuard.scanWorkspace",
+        "title": "Security Guard: Scan Workspace",
+        "icon": "$(refresh)",
+        "category": "CodeWarden"
+      },
+      {
+        "command": "securityGuard.generatePatch",
+        "title": "Security Guard: Generate Verified Patch",
+        "icon": "$(tools)",
+        "category": "CodeWarden"
+      },
+      {
+        "command": "securityGuard.patchFromTree",
+        "title": "Generate Verified Patch",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "securityGuard.openFinding",
+        "title": "Open Finding in Editor"
+      },
+      {
+        "command": "securityGuard.refreshStatus",
+        "title": "Refresh Guard Status",
+        "icon": "$(sync)"
+      }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "securityGuard.scanWorkspace",
+          "when": "view == codewarden.findingsView",
+          "group": "navigation"
+        },
+        {
+          "command": "securityGuard.refreshStatus",
+          "when": "view == codewarden.statusView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "securityGuard.patchFromTree",
+          "when": "viewItem == findingItem",
+          "group": "inline"
+        }
+      ]
+    },
     "configuration": {
       "title": "Security Guard",
       "properties": {

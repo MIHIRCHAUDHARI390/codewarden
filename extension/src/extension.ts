@@ -22,17 +22,163 @@ const findings = new Map<string, Finding>();
 const scannedText = new Map<string, string>();
 const patchedDocs = new Map<string, string>();
 let statusBar: vscode.StatusBarItem;
+let findingsTreeProvider: FindingsTreeProvider;
+let statusTreeProvider: StatusTreeProvider;
+
+// ---------------- Tree View Providers ----------------
+
+class FindingTreeItem extends vscode.TreeItem {
+  constructor(public readonly finding: Finding) {
+    const fileName = finding.file.split("/").pop() || finding.file;
+    super(`${fileName}:${finding.line_start} - ${finding.class.replace(/_/g, " ")}`, vscode.TreeItemCollapsibleState.None);
+    
+    this.description = `[${finding.severity.toUpperCase()}]`;
+    this.tooltip = new vscode.MarkdownString(
+      `### ${finding.message}\n\n` +
+      `- **File:** \`${finding.file}:${finding.line_start}\`\n` +
+      `- **Class:** \`${finding.class}\`\n` +
+      `- **Severity:** \`${finding.severity.toUpperCase()}\`\n` +
+      `- **Rationale:** ${finding.triage_rationale || "Confirmed vulnerability"}\n\n` +
+      `*Click to navigate. Click 🛠️ to generate verified patch.*`
+    );
+    this.contextValue = "findingItem";
+
+    if (finding.severity === "critical" || finding.severity === "high") {
+      this.iconPath = new vscode.ThemeIcon("error", new vscode.ThemeColor("errorForeground"));
+    } else if (finding.severity === "medium") {
+      this.iconPath = new vscode.ThemeIcon("warning", new vscode.ThemeColor("problemsWarningIcon.foreground"));
+    } else {
+      this.iconPath = new vscode.ThemeIcon("info", new vscode.ThemeColor("problemsInfoIcon.foreground"));
+    }
+
+    this.command = {
+      command: "securityGuard.openFinding",
+      title: "Open Finding",
+      arguments: [finding],
+    };
+  }
+}
+
+class FindingsTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  private _onDidChangeTreeData = new vscode.EventEmitter<vscode.TreeItem | undefined | void>();
+  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+  private currentFindings: Finding[] = [];
+
+  refresh(newFindings?: Finding[]) {
+    if (newFindings) {
+      this.currentFindings = newFindings;
+    } else {
+      this.currentFindings = Array.from(findings.values());
+    }
+    this._onDidChangeTreeData.fire();
+  }
+
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(element?: vscode.TreeItem): vscode.ProviderResult<vscode.TreeItem[]> {
+    if (element) return [];
+    if (this.currentFindings.length === 0) {
+      const item = new vscode.TreeItem("No security findings");
+      item.description = "Workspace clean or not scanned yet";
+      item.iconPath = new vscode.ThemeIcon("shield");
+      return [item];
+    }
+    return this.currentFindings.map((f) => new FindingTreeItem(f));
+  }
+}
+
+class StatusTreeItem extends vscode.TreeItem {
+  constructor(label: string, description: string, icon: string, color?: string) {
+    super(label, vscode.TreeItemCollapsibleState.None);
+    this.description = description;
+    this.iconPath = color ? new vscode.ThemeIcon(icon, new vscode.ThemeColor(color)) : new vscode.ThemeIcon(icon);
+  }
+}
+
+class StatusTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  private _onDidChangeTreeData = new vscode.EventEmitter<vscode.TreeItem | undefined | void>();
+  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+  private healthData: { backend?: string; sandbox_image_ready?: boolean; llm_configured?: boolean } | null = null;
+  private isChecking = false;
+
+  refresh() {
+    this.checkHealth();
+  }
+
+  async checkHealth() {
+    if (this.isChecking) return;
+    this.isChecking = true;
+    try {
+      const url = config().get<string>("backendUrl") + "/health";
+      const r = await fetch(url);
+      if (r.ok) {
+        this.healthData = (await r.json()) as any;
+      } else {
+        this.healthData = null;
+      }
+    } catch {
+      this.healthData = null;
+    } finally {
+      this.isChecking = false;
+      this._onDidChangeTreeData.fire();
+    }
+  }
+
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(element?: vscode.TreeItem): vscode.ProviderResult<vscode.TreeItem[]> {
+    if (element) return [];
+    const items: vscode.TreeItem[] = [];
+
+    if (this.healthData) {
+      items.push(new StatusTreeItem("Backend Server", "Online (port 8765)", "pass-filled", "testing.iconPassed"));
+      items.push(
+        this.healthData.sandbox_image_ready
+          ? new StatusTreeItem("Docker Sandbox", "Ready (codewarden-sandbox)", "package", "testing.iconPassed")
+          : new StatusTreeItem("Docker Sandbox", "Image missing", "error", "errorForeground")
+      );
+      items.push(
+        this.healthData.llm_configured
+          ? new StatusTreeItem("Mistral AI", `Active (${config().get<string>("model") || "codestral-latest"})`, "sparkle", "testing.iconPassed")
+          : new StatusTreeItem("Mistral AI", "Key missing (vulnerable_dependency only)", "warning", "problemsWarningIcon.foreground")
+      );
+    } else {
+      items.push(new StatusTreeItem("Backend Server", "Offline (Check localhost:8765)", "error", "errorForeground"));
+      items.push(new StatusTreeItem("Docker Sandbox", "Unavailable", "circle-slash"));
+      items.push(new StatusTreeItem("Mistral AI", "Unavailable", "circle-slash"));
+    }
+
+    const findingCount = findings.size;
+    items.push(new StatusTreeItem("Active Findings", `${findingCount} detected`, findingCount > 0 ? "shield" : "pass", findingCount > 0 ? "problemsWarningIcon.foreground" : "testing.iconPassed"));
+
+    return items;
+  }
+}
+
+// ---------------- Extension Activation ----------------
 
 export function activate(context: vscode.ExtensionContext) {
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
   setStatus("idle");
   statusBar.show();
 
+  findingsTreeProvider = new FindingsTreeProvider();
+  statusTreeProvider = new StatusTreeProvider();
+
   context.subscriptions.push(
     diagnostics, output, statusBar,
+    vscode.window.registerTreeDataProvider("codewarden.findingsView", findingsTreeProvider),
+    vscode.window.registerTreeDataProvider("codewarden.statusView", statusTreeProvider),
     vscode.commands.registerCommand("securityGuard.scanFile", scanActiveFile),
     vscode.commands.registerCommand("securityGuard.scanWorkspace", scanWorkspace),
     vscode.commands.registerCommand("securityGuard.generatePatch", generatePatch),
+    vscode.commands.registerCommand("securityGuard.patchFromTree", patchFromTree),
+    vscode.commands.registerCommand("securityGuard.openFinding", openFinding),
+    vscode.commands.registerCommand("securityGuard.refreshStatus", () => statusTreeProvider.refresh()),
     vscode.workspace.registerTextDocumentContentProvider(PATCHED_SCHEME, {
       provideTextDocumentContent: (uri) => patchedDocs.get(uri.toString()) ?? "",
     }),
@@ -43,6 +189,9 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
   );
+
+  // Initial status check
+  statusTreeProvider.refresh();
 }
 
 export function deactivate() {}
@@ -82,6 +231,8 @@ async function scanDocuments(docs: vscode.TextDocument[]) {
       scannedText.set(d.uri.toString(), d.getText());
     }
     const byFile = new Map<string, vscode.Diagnostic[]>();
+    findings.clear();
+
     for (const f of res.findings) {
       if (SEVERITY_RANK[f.severity] < threshold) continue;
       const uri = vscode.Uri.joinPath(folder.uri, f.file);
@@ -97,13 +248,42 @@ async function scanDocuments(docs: vscode.TextDocument[]) {
     for (const [uriStr, diags] of byFile) {
       diagnostics.set(vscode.Uri.parse(uriStr), diags);
     }
-    vscode.window.showInformationMessage(`Security Guard: ${res.findings.length} finding(s).`);
+
+    // Refresh tree views
+    findingsTreeProvider.refresh(Array.from(findings.values()));
+    statusTreeProvider.refresh();
+
+    vscode.window.showInformationMessage(`Security Guard: ${res.findings.length} finding(s) detected.`);
   } catch (e) {
     setStatus("error");
     vscode.window.showErrorMessage(`Security Guard scan failed: ${e}`);
     return;
   }
   setStatus("idle");
+}
+
+// ---------------- Navigation & Actions ----------------
+
+async function openFinding(finding: Finding) {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return;
+  const uri = vscode.Uri.joinPath(folder.uri, finding.file);
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(doc);
+    const line = Math.max(0, finding.line_start - 1);
+    const range = new vscode.Range(line, 0, line, 100);
+    editor.selection = new vscode.Selection(range.start, range.end);
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Unable to open file ${finding.file}: ${err}`);
+  }
+}
+
+async function patchFromTree(item?: FindingTreeItem) {
+  if (item && item.finding) {
+    await runPatchForFinding(item.finding);
+  }
 }
 
 // ---------------- Patching ----------------
@@ -120,7 +300,7 @@ async function generatePatch(actionDiag?: vscode.Diagnostic) {
   );
 
   if (!diag || typeof diag.code !== "string") {
-    vscode.window.showWarningMessage("No security finding on this line. Run 'Security Guard: Scan File' first.");
+    vscode.window.showWarningMessage("No security finding on this line. Run 'Security Guard: Scan Workspace' first.");
     return;
   }
   const finding = findings.get(diag.code as string);
@@ -129,8 +309,14 @@ async function generatePatch(actionDiag?: vscode.Diagnostic) {
     return;
   }
 
-  const fileUri = editor.document.uri;
-  const folder = vscode.workspace.getWorkspaceFolder(fileUri)!;
+  await runPatchForFinding(finding);
+}
+
+async function runPatchForFinding(finding: Finding) {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return;
+  const fileUri = vscode.Uri.joinPath(folder.uri, finding.file);
+
   const maxRetries = config().get<number>("maxRetries") ?? 3;
   const model = config().get<string>("model") || undefined;
   const apiKey = config().get<string>("apiKey") || undefined;
@@ -206,7 +392,13 @@ async function accept(finding: Finding, fileUri: vscode.Uri, res: PatchResponse)
   await vscode.workspace.applyEdit(edit);
   await doc.save();
   await post("/decision", { finding_id: finding.id, decision: "accepted", reason: null });
-  vscode.window.showInformationMessage("Patch applied.");
+
+  // Remove finding from list and refresh views
+  findings.delete(finding.id);
+  findingsTreeProvider.refresh(Array.from(findings.values()));
+  statusTreeProvider.refresh();
+
+  vscode.window.showInformationMessage("Patch applied successfully.");
 }
 
 // ---------------- Code Actions ----------------
