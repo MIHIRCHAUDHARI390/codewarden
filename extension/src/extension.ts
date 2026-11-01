@@ -85,7 +85,9 @@ async function scanDocuments(docs: vscode.TextDocument[]) {
     for (const f of res.findings) {
       if (SEVERITY_RANK[f.severity] < threshold) continue;
       const uri = vscode.Uri.joinPath(folder.uri, f.file);
-      const range = new vscode.Range(f.line_start - 1, 0, f.line_end - 1, 1000);
+      const lineStart = Math.max(0, f.line_start - 1);
+      const lineEnd = Math.max(lineStart, f.line_end - 1);
+      const range = new vscode.Range(lineStart, 0, lineEnd, 1000);
       const diag = new vscode.Diagnostic(range, `${f.message} (${f.class})`, toSeverity(f.severity));
       diag.source = "Security Guard";
       diag.code = f.id;
@@ -106,28 +108,43 @@ async function scanDocuments(docs: vscode.TextDocument[]) {
 
 // ---------------- Patching ----------------
 
-async function generatePatch() {
+async function generatePatch(actionDiag?: vscode.Diagnostic) {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return;
-  const diag = editor.selections.length
-    ? diagnostics.get(editor.document.uri)?.find((d) => d.range.contains(editor.selection.start))
-    : diagnostics.get(editor.document.uri)?.[0];
+
+  const fileDiags = diagnostics.get(editor.document.uri) ?? [];
+  const curPos = editor.selection.start;
+  const diag = (actionDiag && typeof actionDiag.code === "string") ? actionDiag : (
+    fileDiags.find((d) => d.range.contains(curPos) || (curPos.line >= d.range.start.line && curPos.line <= d.range.end.line))
+    ?? fileDiags[0]
+  );
+
   if (!diag || typeof diag.code !== "string") {
-    vscode.window.showWarningMessage("No security finding on this line.");
+    vscode.window.showWarningMessage("No security finding on this line. Run 'Security Guard: Scan File' first.");
     return;
   }
   const finding = findings.get(diag.code as string);
-  if (!finding) return;
+  if (!finding) {
+    vscode.window.showWarningMessage("Security finding not in memory. Run 'Security Guard: Scan Workspace' to refresh.");
+    return;
+  }
 
   const fileUri = editor.document.uri;
   const folder = vscode.workspace.getWorkspaceFolder(fileUri)!;
   const maxRetries = config().get<number>("maxRetries") ?? 3;
   const model = config().get<string>("model") || undefined;
+  const apiKey = config().get<string>("apiKey") || undefined;
 
   setStatus("patching");
   let res: PatchResponse;
   try {
-    res = await post("/patch", { run_id: finding.run_id, finding_id: finding.id, max_retries: maxRetries, model });
+    res = await post("/patch", {
+      run_id: finding.run_id,
+      finding_id: finding.id,
+      max_retries: maxRetries,
+      model,
+      api_key: apiKey,
+    });
   } catch (e) {
     setStatus("error");
     vscode.window.showErrorMessage(`Security Guard patch failed: ${e}`);
@@ -136,7 +153,13 @@ async function generatePatch() {
   setStatus("idle");
 
   if (!res.verified || !res.patch || !res.evidence) {
-    vscode.window.showWarningMessage(`No verified fix: ${res.message}`);
+    if (res.message && res.message.includes("MISTRAL_API_KEY")) {
+      vscode.window.showErrorMessage(
+        "Mistral API key is required to generate AI fixes. Set 'securityGuard.apiKey' in VS Code settings or set MISTRAL_API_KEY on the backend."
+      );
+    } else {
+      vscode.window.showWarningMessage(`No verified fix: ${res.message || "Checks failed in sandbox."}`);
+    }
     return;
   }
 
@@ -189,11 +212,19 @@ async function accept(finding: Finding, fileUri: vscode.Uri, res: PatchResponse)
 // ---------------- Code Actions ----------------
 
 function provideCodeActions(document: vscode.TextDocument, range: vscode.Range): vscode.CodeAction[] {
-  const diags = diagnostics.get(document.uri)?.filter((d) => d.range.contains(range.start)) ?? [];
-  return diags.map((d) => {
+  const fileDiags = diagnostics.get(document.uri) ?? [];
+  const lineRange = new vscode.Range(range.start.line, 0, range.end.line, 1000);
+  const matched = fileDiags.filter((d) => 
+    d.range.intersection(lineRange) || 
+    d.range.contains(range.start) ||
+    (range.start.line >= d.range.start.line && range.start.line <= d.range.end.line)
+  );
+  const targetDiags = matched.length ? matched : (fileDiags.length === 1 ? fileDiags : []);
+  return targetDiags.map((d) => {
     const action = new vscode.CodeAction("Generate verified patch", vscode.CodeActionKind.QuickFix);
-    action.command = { command: "securityGuard.generatePatch", title: "Generate verified patch" };
+    action.command = { command: "securityGuard.generatePatch", title: "Generate verified patch", arguments: [d] };
     action.diagnostics = [d];
+    action.isPreferred = true;
     return action;
   });
 }

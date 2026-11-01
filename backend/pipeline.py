@@ -68,6 +68,9 @@ def planner_node(state: PipelineState) -> dict:
     the rest of the pipeline can still run.
     """
     finding = state["finding"]
+    if finding.vuln_class == "vulnerable_dependency":
+        return {"plan": {"root_cause": finding.message, "strategy": "Bump package version in requirements.txt", "pitfalls": ""}}
+
     original = state["original"]
     model = state.get("model")
     try:
@@ -106,6 +109,10 @@ def review_node(state: PipelineState) -> dict:
 
     if patch is None:
         return {"review_attempt": review_attempt, "review_approved": False}
+
+    if finding.vuln_class == "vulnerable_dependency":
+        return {"review_attempt": review_attempt, "review_approved": True,
+                "review_approval_attempt": review_attempt}
 
     try:
         approved, critique = review_patch(finding, patch, original, model)

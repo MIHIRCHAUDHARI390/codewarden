@@ -13,7 +13,7 @@ import httpx
 from scanner import SECRET_PATTERNS
 from schemas import Explanation, Finding, Patch, RegressionTest
 
-MODEL = os.environ.get("CODEWARDEN_MODEL", "mistral-large-4")
+MODEL = os.environ.get("CODEWARDEN_MODEL", "codestral-latest")
 MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
 
 FIX_HINTS = {

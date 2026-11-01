@@ -71,7 +71,7 @@ def llm_triage_pass(findings: list[Finding], project_root: str, model: str | Non
     if not key:
         return  
 
-    model = model or os.environ.get("CODEWARDEN_MODEL", "mistral-large-4")
+    model = model or os.environ.get("CODEWARDEN_MODEL", "codestral-latest")
 
     for f in findings:
         try:

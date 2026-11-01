@@ -14,7 +14,7 @@ import os
 from patcher import PatchError, call_llm, redact
 from schemas import Finding, Patch
 
-MODEL = os.environ.get("CODEWARDEN_MODEL", "mistral-large-4")
+MODEL = os.environ.get("CODEWARDEN_MODEL", "codestral-latest")
 
 REVIEWER_SYSTEM_PROMPT = """You are the Reviewer agent of a security-fix pipeline. A Patch agent
 has proposed a fix for a confirmed vulnerability in Python code. Your only job

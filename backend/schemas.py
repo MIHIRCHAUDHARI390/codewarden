@@ -70,7 +70,8 @@ class PatchRequest(BaseModel):
     run_id: str
     finding_id: str
     max_retries: int = 3
-    model: Optional[str] = None 
+    model: Optional[str] = None
+    api_key: Optional[str] = None
 
 class PatchResponse(BaseModel):
     verified: bool

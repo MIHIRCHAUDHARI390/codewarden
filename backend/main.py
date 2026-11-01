@@ -5,6 +5,15 @@ import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
 
+# Load .env file if present
+env_path = Path(__file__).parent / ".env"
+if env_path.exists():
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
 from fastapi import FastAPI, HTTPException
 
 import db
@@ -29,12 +38,12 @@ def health():
 
 @app.post("/scan", response_model=ScanResponse)
 def scan_files(req: ScanRequest):
-    files = {clean_path(f.path): f.content for f in req.files}
+    files = {clean_path(f.path): f.content.replace("\r\n", "\n") for f in req.files}
     tmp = Path(tempfile.mkdtemp(prefix="codewarden-scan-"))
     try:
         for path, content in files.items():
             (tmp / path).parent.mkdir(parents=True, exist_ok=True)
-            (tmp / path).write_text(content, encoding="utf-8")
+            (tmp / path).write_text(content, encoding="utf-8", newline="")
         findings = triage(scan(tmp, list(files)), req.project_root)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -51,6 +60,8 @@ def scan_files(req: ScanRequest):
 
 @app.post("/patch", response_model=PatchResponse)
 def patch(req: PatchRequest):
+    if req.api_key:
+        os.environ["MISTRAL_API_KEY"] = req.api_key
     run = db.get_run(req.run_id)
     if not run:
         raise HTTPException(404, "Unknown run_id")

@@ -14,7 +14,7 @@ import os
 from patcher import PatchError, call_llm, redact
 from schemas import Finding
 
-MODEL = os.environ.get("CODEWARDEN_MODEL", "mistral-large-4")
+MODEL = os.environ.get("CODEWARDEN_MODEL", "codestral-latest")
 
 PLANNER_SYSTEM_PROMPT = """You are the Planner agent of a security-fix pipeline. You are given a
 confirmed vulnerability and the file that contains it, BEFORE any patch is

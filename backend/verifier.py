@@ -26,7 +26,7 @@ def verify(finding: Finding, patch: Patch, project_root: str, original: str) -> 
 
         # 1. Patch applies cleanly to original file (no conflicts), and patch changes something.
         on_disk = (Path(project_root) / finding.file).read_text(encoding="utf-8")
-        if on_disk != original:
+        if on_disk.replace("\r\n", "\n") != original.replace("\r\n", "\n"):
             checks["patch_applies"] = "file_changed_since_scan"
         elif not patch.unified_diff:
             checks["patch_applies"] = "empty_diff"
@@ -110,4 +110,4 @@ def feedback(v: VerificationResult, patch: Patch) -> dict:
 
 def write(path: Path, content: str):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    path.write_text(content.replace("\r\n", "\n"), encoding="utf-8", newline="")

@@ -18,8 +18,9 @@
       "title": "Security Guard",
       "properties": {
         "securityGuard.backendUrl": { "type": "string", "default": "http://127.0.0.1:8765" },
+        "securityGuard.apiKey": { "type": "string", "default": "", "description": "Mistral API key. If left blank, uses MISTRAL_API_KEY environment variable on backend." },
         "securityGuard.scanOnSave": { "type": "boolean", "default": true },
-        "securityGuard.model": { "type": "string", "default": "", "description": "Mistral model id. Empty = backend default (mistral-large-4)." },
+        "securityGuard.model": { "type": "string", "default": "", "description": "Mistral model id. Empty = backend default (codestral-latest)." },
         "securityGuard.maxRetries": { "type": "number", "default": 3 },
         "securityGuard.severityThreshold": { "type": "string", "enum": ["low", "medium", "high", "critical"], "default": "low" }
       }
