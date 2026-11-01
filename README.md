@@ -20,7 +20,7 @@ No auto-commits. No breaking your code. No trusting an AI blindly.
 
 - Python 3.11+
 - Node.js 18+
-- Docker Desktop (running)
+- Docker Desktop
 - Mistral API Key (free tier works)
 
 ## Installation
