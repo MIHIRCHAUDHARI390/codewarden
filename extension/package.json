@@ -11,8 +11,7 @@
   "activationEvents": [
     "onLanguage:python",
     "workspaceContains:requirements.txt",
-    "onView:codewarden.findingsView",
-    "onView:codewarden.statusView"
+    "onView:codewarden.dashboard"
   ],
   "contributes": {
     "viewsContainers": {
@@ -27,12 +26,9 @@
     "views": {
       "codewarden-sidebar": [
         {
-          "id": "codewarden.findingsView",
-          "name": "Security Findings"
-        },
-        {
-          "id": "codewarden.statusView",
-          "name": "Guard Status"
+          "type": "webview",
+          "id": "codewarden.dashboard",
+          "name": "CodeWarden Guard"
         }
       ]
     },
@@ -45,51 +41,14 @@
       {
         "command": "securityGuard.scanWorkspace",
         "title": "Security Guard: Scan Workspace",
-        "icon": "$(refresh)",
         "category": "CodeWarden"
       },
       {
         "command": "securityGuard.generatePatch",
         "title": "Security Guard: Generate Verified Patch",
-        "icon": "$(tools)",
         "category": "CodeWarden"
-      },
-      {
-        "command": "securityGuard.patchFromTree",
-        "title": "Generate Verified Patch",
-        "icon": "$(tools)"
-      },
-      {
-        "command": "securityGuard.openFinding",
-        "title": "Open Finding in Editor"
-      },
-      {
-        "command": "securityGuard.refreshStatus",
-        "title": "Refresh Guard Status",
-        "icon": "$(sync)"
       }
     ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "securityGuard.scanWorkspace",
-          "when": "view == codewarden.findingsView",
-          "group": "navigation"
-        },
-        {
-          "command": "securityGuard.refreshStatus",
-          "when": "view == codewarden.statusView",
-          "group": "navigation"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "securityGuard.patchFromTree",
-          "when": "viewItem == findingItem",
-          "group": "inline"
-        }
-      ]
-    },
     "configuration": {
       "title": "Security Guard",
       "properties": {

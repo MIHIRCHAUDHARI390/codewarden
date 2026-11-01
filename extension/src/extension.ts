@@ -22,140 +22,590 @@ const findings = new Map<string, Finding>();
 const scannedText = new Map<string, string>();
 const patchedDocs = new Map<string, string>();
 let statusBar: vscode.StatusBarItem;
-let findingsTreeProvider: FindingsTreeProvider;
-let statusTreeProvider: StatusTreeProvider;
+let dashboardProvider: CodeWardenDashboardProvider;
 
-// ---------------- Tree View Providers ----------------
+// ---------------- Webview Dashboard Provider ----------------
 
-class FindingTreeItem extends vscode.TreeItem {
-  constructor(public readonly finding: Finding) {
-    const fileName = finding.file.split("/").pop() || finding.file;
-    super(`${fileName}:${finding.line_start} - ${finding.class.replace(/_/g, " ")}`, vscode.TreeItemCollapsibleState.None);
-    
-    this.description = `[${finding.severity.toUpperCase()}]`;
-    this.tooltip = new vscode.MarkdownString(
-      `### ${finding.message}\n\n` +
-      `- **File:** \`${finding.file}:${finding.line_start}\`\n` +
-      `- **Class:** \`${finding.class}\`\n` +
-      `- **Severity:** \`${finding.severity.toUpperCase()}\`\n` +
-      `- **Rationale:** ${finding.triage_rationale || "Confirmed vulnerability"}\n\n` +
-      `*Click to navigate. Click 🛠️ to generate verified patch.*`
-    );
-    this.contextValue = "findingItem";
+class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = "codewarden.dashboard";
+  private _view?: vscode.WebviewView;
 
-    if (finding.severity === "critical" || finding.severity === "high") {
-      this.iconPath = new vscode.ThemeIcon("error", new vscode.ThemeColor("errorForeground"));
-    } else if (finding.severity === "medium") {
-      this.iconPath = new vscode.ThemeIcon("warning", new vscode.ThemeColor("problemsWarningIcon.foreground"));
-    } else {
-      this.iconPath = new vscode.ThemeIcon("info", new vscode.ThemeColor("problemsInfoIcon.foreground"));
-    }
+  constructor(private readonly extensionUri: vscode.Uri) {}
 
-    this.command = {
-      command: "securityGuard.openFinding",
-      title: "Open Finding",
-      arguments: [finding],
+  resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    _context: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken
+  ) {
+    this._view = webviewView;
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri],
     };
+
+    webviewView.webview.html = this.getHtml();
+
+    webviewView.webview.onDidReceiveMessage(async (msg) => {
+      switch (msg.command) {
+        case "scanWorkspace":
+          await scanWorkspace();
+          break;
+        case "scanFile":
+          await scanActiveFile();
+          break;
+        case "openFinding":
+          await openFindingById(msg.findingId);
+          break;
+        case "generatePatch":
+          const f = findings.get(msg.findingId);
+          if (f) await runPatchForFinding(f);
+          break;
+        case "saveApiKey":
+          await saveApiKey(msg.apiKey);
+          break;
+        case "refreshHealth":
+          await this.syncHealth();
+          break;
+        case "ready":
+          await this.syncHealth();
+          this.syncFindings();
+          this.syncApiKey();
+          break;
+      }
+    });
+
+    this.syncHealth();
+    this.syncFindings();
+    this.syncApiKey();
   }
-}
 
-class FindingsTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<vscode.TreeItem | undefined | void>();
-  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
-  private currentFindings: Finding[] = [];
-
-  refresh(newFindings?: Finding[]) {
-    if (newFindings) {
-      this.currentFindings = newFindings;
-    } else {
-      this.currentFindings = Array.from(findings.values());
+  setStatus(status: "idle" | "scanning" | "patching", message: string) {
+    if (this._view) {
+      this._view.webview.postMessage({ type: "status", status, message });
     }
-    this._onDidChangeTreeData.fire();
   }
 
-  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
-    return element;
-  }
-
-  getChildren(element?: vscode.TreeItem): vscode.ProviderResult<vscode.TreeItem[]> {
-    if (element) return [];
-    if (this.currentFindings.length === 0) {
-      const item = new vscode.TreeItem("No security findings");
-      item.description = "Workspace clean or not scanned yet";
-      item.iconPath = new vscode.ThemeIcon("shield");
-      return [item];
+  syncFindings() {
+    if (this._view) {
+      this._view.webview.postMessage({
+        type: "findings",
+        findings: Array.from(findings.values()),
+      });
     }
-    return this.currentFindings.map((f) => new FindingTreeItem(f));
-  }
-}
-
-class StatusTreeItem extends vscode.TreeItem {
-  constructor(label: string, description: string, icon: string, color?: string) {
-    super(label, vscode.TreeItemCollapsibleState.None);
-    this.description = description;
-    this.iconPath = color ? new vscode.ThemeIcon(icon, new vscode.ThemeColor(color)) : new vscode.ThemeIcon(icon);
-  }
-}
-
-class StatusTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
-  private _onDidChangeTreeData = new vscode.EventEmitter<vscode.TreeItem | undefined | void>();
-  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
-  private healthData: { backend?: string; sandbox_image_ready?: boolean; llm_configured?: boolean } | null = null;
-  private isChecking = false;
-
-  refresh() {
-    this.checkHealth();
   }
 
-  async checkHealth() {
-    if (this.isChecking) return;
-    this.isChecking = true;
+  syncApiKey() {
+    const key = config().get<string>("apiKey") || "";
+    if (this._view) {
+      this._view.webview.postMessage({ type: "apiKey", apiKey: key });
+    }
+  }
+
+  async syncHealth() {
     try {
       const url = config().get<string>("backendUrl") + "/health";
       const r = await fetch(url);
       if (r.ok) {
-        this.healthData = (await r.json()) as any;
-      } else {
-        this.healthData = null;
+        const data = (await r.json()) as any;
+        if (this._view) {
+          this._view.webview.postMessage({
+            type: "health",
+            online: true,
+            sandbox: !!data.sandbox_image_ready,
+            llm: !!data.llm_configured,
+            model: config().get<string>("model") || "codestral-latest",
+          });
+        }
+        return;
       }
-    } catch {
-      this.healthData = null;
-    } finally {
-      this.isChecking = false;
-      this._onDidChangeTreeData.fire();
+    } catch {}
+    if (this._view) {
+      this._view.webview.postMessage({
+        type: "health",
+        online: false,
+        sandbox: false,
+        llm: false,
+        model: config().get<string>("model") || "codestral-latest",
+      });
     }
   }
 
-  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
-    return element;
-  }
-
-  getChildren(element?: vscode.TreeItem): vscode.ProviderResult<vscode.TreeItem[]> {
-    if (element) return [];
-    const items: vscode.TreeItem[] = [];
-
-    if (this.healthData) {
-      items.push(new StatusTreeItem("Backend Server", "Online (port 8765)", "pass-filled", "testing.iconPassed"));
-      items.push(
-        this.healthData.sandbox_image_ready
-          ? new StatusTreeItem("Docker Sandbox", "Ready (codewarden-sandbox)", "package", "testing.iconPassed")
-          : new StatusTreeItem("Docker Sandbox", "Image missing", "error", "errorForeground")
-      );
-      items.push(
-        this.healthData.llm_configured
-          ? new StatusTreeItem("Mistral AI", `Active (${config().get<string>("model") || "codestral-latest"})`, "sparkle", "testing.iconPassed")
-          : new StatusTreeItem("Mistral AI", "Key missing (vulnerable_dependency only)", "warning", "problemsWarningIcon.foreground")
-      );
-    } else {
-      items.push(new StatusTreeItem("Backend Server", "Offline (Check localhost:8765)", "error", "errorForeground"));
-      items.push(new StatusTreeItem("Docker Sandbox", "Unavailable", "circle-slash"));
-      items.push(new StatusTreeItem("Mistral AI", "Unavailable", "circle-slash"));
+  private getHtml(): string {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeWarden</title>
+  <style>
+    :root {
+      --bg: var(--vscode-sideBar-background, #18181b);
+      --card-bg: var(--vscode-editor-background, #202024);
+      --text: var(--vscode-foreground, #e4e4e7);
+      --muted: var(--vscode-descriptionForeground, #a1a1aa);
+      --accent: var(--vscode-button-background, #3b82f6);
+      --accent-hover: var(--vscode-button-hoverBackground, #2563eb);
+      --btn-fg: var(--vscode-button-foreground, #ffffff);
+      --border: var(--vscode-widget-border, #2e2e34);
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --info: #3b82f6;
+      --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+      font-size: var(--vscode-font-size, 13px);
+      padding: 12px;
+      line-height: 1.4;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+    .header h2 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+    .shield-icon {
+      width: 20px;
+      height: 20px;
+      fill: none;
+      stroke: var(--accent);
+      stroke-width: 2;
     }
 
-    const findingCount = findings.size;
-    items.push(new StatusTreeItem("Active Findings", `${findingCount} detected`, findingCount > 0 ? "shield" : "pass", findingCount > 0 ? "problemsWarningIcon.foreground" : "testing.iconPassed"));
+    /* Status Banner Card */
+    .status-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      transition: all 0.2s ease;
+    }
+    .status-card.idle { border-left: 3px solid var(--success); }
+    .status-card.scanning { border-left: 3px solid var(--accent); }
+    .status-card.patching { border-left: 3px solid var(--warning); }
 
-    return items;
+    .pulse-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--success);
+      flex-shrink: 0;
+    }
+    .status-card.scanning .pulse-dot {
+      background: var(--accent);
+      animation: pulse 1s infinite alternate;
+    }
+    .status-card.patching .pulse-dot {
+      background: var(--warning);
+      animation: pulse 0.7s infinite alternate;
+    }
+    @keyframes pulse {
+      from { transform: scale(0.9); opacity: 0.5; }
+      to { transform: scale(1.3); opacity: 1; }
+    }
+    .status-info { flex: 1; min-width: 0; }
+    .status-title { font-weight: 600; font-size: 12px; text-transform: uppercase; }
+    .status-desc { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* API Key Box */
+    .key-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+    .box-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .key-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .key-input {
+      flex: 1;
+      background: var(--vscode-input-background, #18181b);
+      color: var(--vscode-input-foreground, #fff);
+      border: 1px solid var(--vscode-input-border, #3f3f46);
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 12px;
+      outline: none;
+    }
+    .key-input:focus {
+      border-color: var(--accent);
+    }
+    .badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+    .badge-ok { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+    .badge-missing { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+
+    /* Action Buttons */
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      background: var(--accent);
+      color: var(--btn-fg);
+      border: none;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      margin-bottom: 6px;
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .btn-sm {
+      width: auto;
+      padding: 4px 8px;
+      font-size: 11px;
+      margin-bottom: 0;
+    }
+
+    /* System Health Pills */
+    .health-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .pill {
+      font-size: 10px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .pill.active { color: var(--success); border-color: rgba(16, 185, 129, 0.3); }
+
+    /* Findings List */
+    .section-header {
+      font-size: 12px;
+      font-weight: 600;
+      margin: 12px 0 8px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .finding-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 8px;
+      transition: border-color 0.15s ease;
+    }
+    .finding-card:hover { border-color: var(--accent); }
+    .finding-card.critical { border-left: 3px solid var(--danger); }
+    .finding-card.high { border-left: 3px solid var(--danger); }
+    .finding-card.medium { border-left: 3px solid var(--warning); }
+    .finding-card.low { border-left: 3px solid var(--info); }
+
+    .card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .sev-tag {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      text-transform: uppercase;
+    }
+    .sev-critical, .sev-high { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+    .sev-medium { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+    .sev-low { background: rgba(59, 130, 246, 0.2); color: var(--info); }
+
+    .file-loc {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: monospace;
+    }
+    .vuln-title {
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .vuln-msg {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      line-height: 1.3;
+    }
+    .card-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .card-actions .btn {
+      flex: 1;
+      padding: 4px 6px;
+      font-size: 11px;
+      margin-bottom: 0;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 24px 12px;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <svg class="shield-icon" viewBox="0 0 24 24">
+      <path d="M12 2L3.5 5.8V11.5C3.5 16.8 7.2 21.4 12 22.8C16.8 21.4 20.5 16.8 20.5 11.5V5.8L12 2Z"/>
+      <circle cx="12" cy="11.5" r="2"/>
+    </svg>
+    <h2>CodeWarden Guard</h2>
+  </div>
+
+  <!-- Live Status Banner -->
+  <div id="statusCard" class="status-card idle">
+    <div class="pulse-dot"></div>
+    <div class="status-info">
+      <div id="statusTitle" class="status-title">System Ready</div>
+      <div id="statusDesc" class="status-desc">Click Scan Workspace to check for vulnerabilities</div>
+    </div>
+  </div>
+
+  <!-- Mistral API Key Input Box ("Dabba") -->
+  <div class="key-box">
+    <div class="box-title">
+      <span>Mistral AI Key</span>
+      <span id="keyBadge" class="badge badge-missing">Missing</span>
+    </div>
+    <div class="key-row">
+      <input type="password" id="apiKeyInput" class="key-input" placeholder="mstrl_..." />
+      <button id="saveKeyBtn" class="btn btn-sm">Save</button>
+    </div>
+  </div>
+
+  <!-- Action Buttons -->
+  <button id="scanWsBtn" class="btn">
+    <span>🛡️</span>
+    <span>Scan Entire Workspace</span>
+  </button>
+  <button id="scanFileBtn" class="btn btn-secondary">
+    <span>📄</span>
+    <span>Scan Active File</span>
+  </button>
+
+  <!-- System Health Badges -->
+  <div class="health-row">
+    <div id="pillBackend" class="pill">Backend: Checking...</div>
+    <div id="pillDocker" class="pill">Sandbox: Checking...</div>
+    <div id="pillModel" class="pill">codestral-latest</div>
+  </div>
+
+  <!-- Findings Section -->
+  <div class="section-header">
+    <span>Security Findings</span>
+    <span id="findingsCount" style="color: var(--muted); font-size: 11px;">0 detected</span>
+  </div>
+
+  <div id="findingsList">
+    <div class="empty-state">
+      <div style="font-size: 20px; margin-bottom: 6px;">🛡️</div>
+      <div>No vulnerabilities scanned yet</div>
+      <div style="font-size: 11px; margin-top: 4px;">Press "Scan Entire Workspace" above</div>
+    </div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+
+    const statusCard = document.getElementById('statusCard');
+    const statusTitle = document.getElementById('statusTitle');
+    const statusDesc = document.getElementById('statusDesc');
+    const keyBadge = document.getElementById('keyBadge');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const saveKeyBtn = document.getElementById('saveKeyBtn');
+    const scanWsBtn = document.getElementById('scanWsBtn');
+    const scanFileBtn = document.getElementById('scanFileBtn');
+    const pillBackend = document.getElementById('pillBackend');
+    const pillDocker = document.getElementById('pillDocker');
+    const pillModel = document.getElementById('pillModel');
+    const findingsList = document.getElementById('findingsList');
+    const findingsCount = document.getElementById('findingsCount');
+
+    // Button Listeners
+    scanWsBtn.addEventListener('click', () => {
+      vscode.postMessage({ command: 'scanWorkspace' });
+    });
+    scanFileBtn.addEventListener('click', () => {
+      vscode.postMessage({ command: 'scanFile' });
+    });
+    saveKeyBtn.addEventListener('click', () => {
+      const key = apiKeyInput.value.trim();
+      if (key) {
+        vscode.postMessage({ command: 'saveApiKey', apiKey: key });
+      }
+    });
+
+    // Handle messages from Extension
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      switch (msg.type) {
+        case 'status':
+          updateStatus(msg.status, msg.message);
+          break;
+        case 'health':
+          updateHealth(msg);
+          break;
+        case 'apiKey':
+          updateApiKey(msg.apiKey);
+          break;
+        case 'findings':
+          renderFindings(msg.findings);
+          break;
+      }
+    });
+
+    function updateStatus(status, message) {
+      statusCard.className = 'status-card ' + status;
+      if (status === 'scanning') {
+        statusTitle.textContent = 'Scanning Workspace...';
+        statusDesc.textContent = message || 'Running Bandit, AST, Secrets & pip-audit...';
+        scanWsBtn.disabled = true;
+      } else if (status === 'patching') {
+        statusTitle.textContent = 'Generating Patch...';
+        statusDesc.textContent = message || 'AI fix generation & Docker sandbox verification...';
+        scanWsBtn.disabled = true;
+      } else {
+        statusTitle.textContent = 'System Ready';
+        statusDesc.textContent = message || 'Workspace scan complete or idle';
+        scanWsBtn.disabled = false;
+      }
+    }
+
+    function updateHealth(h) {
+      if (h.online) {
+        pillBackend.textContent = 'Backend: Online';
+        pillBackend.className = 'pill active';
+      } else {
+        pillBackend.textContent = 'Backend: Offline';
+        pillBackend.className = 'pill';
+      }
+
+      if (h.sandbox) {
+        pillDocker.textContent = 'Docker: Ready';
+        pillDocker.className = 'pill active';
+      } else {
+        pillDocker.textContent = 'Docker: Missing';
+        pillDocker.className = 'pill';
+      }
+
+      pillModel.textContent = h.model || 'codestral-latest';
+    }
+
+    function updateApiKey(key) {
+      if (key) {
+        keyBadge.textContent = 'Configured';
+        keyBadge.className = 'badge badge-ok';
+        apiKeyInput.value = key;
+      } else {
+        keyBadge.textContent = 'Missing';
+        keyBadge.className = 'badge badge-missing';
+      }
+    }
+
+    function renderFindings(items) {
+      findingsCount.textContent = items.length + ' detected';
+      if (!items || items.length === 0) {
+        findingsList.innerHTML = \`
+          <div class="empty-state">
+            <div style="font-size: 20px; margin-bottom: 6px;">✅</div>
+            <div>No vulnerabilities detected</div>
+            <div style="font-size: 11px; margin-top: 4px;">Workspace code is clean!</div>
+          </div>
+        \`;
+        return;
+      }
+
+      findingsList.innerHTML = items.map(f => {
+        const sevClass = 'sev-' + (f.severity || 'low');
+        const cardClass = 'finding-card ' + (f.severity || 'low');
+        const fileName = f.file.split('/').pop() || f.file;
+        const prettyClass = (f.class || '').replace(/_/g, ' ');
+
+        return \`
+          <div class="\${cardClass}">
+            <div class="card-top">
+              <span class="sev-tag \${sevClass}">\${f.severity || 'INFO'}</span>
+              <span class="file-loc">\${fileName}:\${f.line_start}</span>
+            </div>
+            <div class="vuln-title">\${prettyClass}</div>
+            <div class="vuln-msg">\${f.message}</div>
+            <div class="card-actions">
+              <button class="btn btn-secondary" onclick="openItem('\${f.id}')">🔍 View</button>
+              <button class="btn" onclick="patchItem('\${f.id}')">⚡ Fix with AI</button>
+            </div>
+          </div>
+        \`;
+      }).join('');
+    }
+
+    window.openItem = function(id) {
+      vscode.postMessage({ command: 'openFinding', findingId: id });
+    };
+    window.patchItem = function(id) {
+      vscode.postMessage({ command: 'generatePatch', findingId: id });
+    };
+
+    // Notify ready
+    vscode.postMessage({ command: 'ready' });
+  </script>
+</body>
+</html>`;
   }
 }
 
@@ -166,19 +616,14 @@ export function activate(context: vscode.ExtensionContext) {
   setStatus("idle");
   statusBar.show();
 
-  findingsTreeProvider = new FindingsTreeProvider();
-  statusTreeProvider = new StatusTreeProvider();
+  dashboardProvider = new CodeWardenDashboardProvider(context.extensionUri);
 
   context.subscriptions.push(
     diagnostics, output, statusBar,
-    vscode.window.registerTreeDataProvider("codewarden.findingsView", findingsTreeProvider),
-    vscode.window.registerTreeDataProvider("codewarden.statusView", statusTreeProvider),
+    vscode.window.registerWebviewViewProvider(CodeWardenDashboardProvider.viewType, dashboardProvider),
     vscode.commands.registerCommand("securityGuard.scanFile", scanActiveFile),
     vscode.commands.registerCommand("securityGuard.scanWorkspace", scanWorkspace),
     vscode.commands.registerCommand("securityGuard.generatePatch", generatePatch),
-    vscode.commands.registerCommand("securityGuard.patchFromTree", patchFromTree),
-    vscode.commands.registerCommand("securityGuard.openFinding", openFinding),
-    vscode.commands.registerCommand("securityGuard.refreshStatus", () => statusTreeProvider.refresh()),
     vscode.workspace.registerTextDocumentContentProvider(PATCHED_SCHEME, {
       provideTextDocumentContent: (uri) => patchedDocs.get(uri.toString()) ?? "",
     }),
@@ -189,12 +634,42 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
   );
-
-  // Initial status check
-  statusTreeProvider.refresh();
 }
 
 export function deactivate() {}
+
+// ---------------- API Key Management ----------------
+
+async function saveApiKey(newKey: string) {
+  try {
+    await config().update("apiKey", newKey, vscode.ConfigurationTarget.Global);
+    dashboardProvider.syncApiKey();
+    await dashboardProvider.syncHealth();
+    vscode.window.showInformationMessage("Mistral API key saved successfully!");
+  } catch (e) {
+    vscode.window.showErrorMessage(`Failed to save API key: ${e}`);
+  }
+}
+
+// ---------------- Navigation ----------------
+
+async function openFindingById(findingId: string) {
+  const f = findings.get(findingId);
+  if (!f) return;
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return;
+  const uri = vscode.Uri.joinPath(folder.uri, f.file);
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const editor = await vscode.window.showTextDocument(doc);
+    const line = Math.max(0, f.line_start - 1);
+    const range = new vscode.Range(line, 0, line, 100);
+    editor.selection = new vscode.Selection(range.start, range.end);
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Unable to open file ${f.file}: ${err}`);
+  }
+}
 
 // ---------------- Scanning ----------------
 
@@ -222,68 +697,56 @@ async function scanDocuments(docs: vscode.TextDocument[]) {
   const files = docs.map((d) => ({ path: relPath(folder, d.uri), content: d.getText() }));
 
   setStatus("scanning");
-  try {
-    const res = await post("/scan", { project_root: folder.uri.fsPath, files });
-    const threshold = SEVERITY_RANK[config().get<string>("severityThreshold") ?? "low"];
+  dashboardProvider.setStatus("scanning", `Scanning ${files.length} project file(s)...`);
 
-    for (const d of docs) {
-      diagnostics.delete(d.uri);
-      scannedText.set(d.uri.toString(), d.getText());
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "CodeWarden",
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({ message: `Scanning workspace for vulnerabilities...` });
+      try {
+        const res = await post("/scan", { project_root: folder.uri.fsPath, files });
+        const threshold = SEVERITY_RANK[config().get<string>("severityThreshold") ?? "low"];
+
+        for (const d of docs) {
+          diagnostics.delete(d.uri);
+          scannedText.set(d.uri.toString(), d.getText());
+        }
+        const byFile = new Map<string, vscode.Diagnostic[]>();
+        findings.clear();
+
+        for (const f of res.findings) {
+          if (SEVERITY_RANK[f.severity] < threshold) continue;
+          const uri = vscode.Uri.joinPath(folder.uri, f.file);
+          const lineStart = Math.max(0, f.line_start - 1);
+          const lineEnd = Math.max(lineStart, f.line_end - 1);
+          const range = new vscode.Range(lineStart, 0, lineEnd, 1000);
+          const diag = new vscode.Diagnostic(range, `${f.message} (${f.class})`, toSeverity(f.severity));
+          diag.source = "Security Guard";
+          diag.code = f.id;
+          byFile.set(uri.toString(), [...(byFile.get(uri.toString()) ?? []), diag]);
+          findings.set(f.id, f);
+        }
+        for (const [uriStr, diags] of byFile) {
+          diagnostics.set(vscode.Uri.parse(uriStr), diags);
+        }
+
+        // Sync to webview
+        dashboardProvider.syncFindings();
+        dashboardProvider.setStatus("idle", `Scan complete: ${res.findings.length} finding(s) found`);
+        vscode.window.showInformationMessage(`Security Guard: ${res.findings.length} finding(s) detected.`);
+      } catch (e) {
+        setStatus("error");
+        dashboardProvider.setStatus("idle", `Scan failed: ${e}`);
+        vscode.window.showErrorMessage(`Security Guard scan failed: ${e}`);
+      }
     }
-    const byFile = new Map<string, vscode.Diagnostic[]>();
-    findings.clear();
+  );
 
-    for (const f of res.findings) {
-      if (SEVERITY_RANK[f.severity] < threshold) continue;
-      const uri = vscode.Uri.joinPath(folder.uri, f.file);
-      const lineStart = Math.max(0, f.line_start - 1);
-      const lineEnd = Math.max(lineStart, f.line_end - 1);
-      const range = new vscode.Range(lineStart, 0, lineEnd, 1000);
-      const diag = new vscode.Diagnostic(range, `${f.message} (${f.class})`, toSeverity(f.severity));
-      diag.source = "Security Guard";
-      diag.code = f.id;
-      byFile.set(uri.toString(), [...(byFile.get(uri.toString()) ?? []), diag]);
-      findings.set(f.id, f);
-    }
-    for (const [uriStr, diags] of byFile) {
-      diagnostics.set(vscode.Uri.parse(uriStr), diags);
-    }
-
-    // Refresh tree views
-    findingsTreeProvider.refresh(Array.from(findings.values()));
-    statusTreeProvider.refresh();
-
-    vscode.window.showInformationMessage(`Security Guard: ${res.findings.length} finding(s) detected.`);
-  } catch (e) {
-    setStatus("error");
-    vscode.window.showErrorMessage(`Security Guard scan failed: ${e}`);
-    return;
-  }
   setStatus("idle");
-}
-
-// ---------------- Navigation & Actions ----------------
-
-async function openFinding(finding: Finding) {
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) return;
-  const uri = vscode.Uri.joinPath(folder.uri, finding.file);
-  try {
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const editor = await vscode.window.showTextDocument(doc);
-    const line = Math.max(0, finding.line_start - 1);
-    const range = new vscode.Range(line, 0, line, 100);
-    editor.selection = new vscode.Selection(range.start, range.end);
-    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-  } catch (err) {
-    vscode.window.showErrorMessage(`Unable to open file ${finding.file}: ${err}`);
-  }
-}
-
-async function patchFromTree(item?: FindingTreeItem) {
-  if (item && item.finding) {
-    await runPatchForFinding(item.finding);
-  }
 }
 
 // ---------------- Patching ----------------
@@ -322,29 +785,46 @@ async function runPatchForFinding(finding: Finding) {
   const apiKey = config().get<string>("apiKey") || undefined;
 
   setStatus("patching");
-  let res: PatchResponse;
-  try {
-    res = await post("/patch", {
-      run_id: finding.run_id,
-      finding_id: finding.id,
-      max_retries: maxRetries,
-      model,
-      api_key: apiKey,
-    });
-  } catch (e) {
-    setStatus("error");
-    vscode.window.showErrorMessage(`Security Guard patch failed: ${e}`);
-    return;
-  }
-  setStatus("idle");
+  dashboardProvider.setStatus("patching", `Patching ${finding.class.replace(/_/g, " ")} & verifying in Docker...`);
 
-  if (!res.verified || !res.patch || !res.evidence) {
-    if (res.message && res.message.includes("MISTRAL_API_KEY")) {
+  let res: PatchResponse | undefined;
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "CodeWarden",
+      cancellable: false,
+    },
+    async (progress) => {
+      progress.report({ message: `Generating fix with AI & testing 7 checks in Docker sandbox...` });
+      try {
+        res = await post("/patch", {
+          run_id: finding.run_id,
+          finding_id: finding.id,
+          max_retries: maxRetries,
+          model,
+          api_key: apiKey,
+        });
+      } catch (e) {
+        setStatus("error");
+        dashboardProvider.setStatus("idle", `Patch failed: ${e}`);
+        vscode.window.showErrorMessage(`Security Guard patch failed: ${e}`);
+        return;
+      }
+    }
+  );
+
+  setStatus("idle");
+  dashboardProvider.setStatus("idle", "Patch attempt finished");
+
+  if (!res || !res.verified || !res.patch || !res.evidence) {
+    const msg = res?.message || "Checks failed in sandbox.";
+    if (msg.includes("MISTRAL_API_KEY") || msg.includes("Invalid API Key")) {
       vscode.window.showErrorMessage(
-        "Mistral API key is required to generate AI fixes. Set 'securityGuard.apiKey' in VS Code settings or set MISTRAL_API_KEY on the backend."
+        "Mistral API key is invalid or not configured. Please enter your valid key in the CodeWarden sidebar."
       );
     } else {
-      vscode.window.showWarningMessage(`No verified fix: ${res.message || "Checks failed in sandbox."}`);
+      vscode.window.showWarningMessage(`No verified fix: ${msg}`);
     }
     return;
   }
@@ -393,10 +873,9 @@ async function accept(finding: Finding, fileUri: vscode.Uri, res: PatchResponse)
   await doc.save();
   await post("/decision", { finding_id: finding.id, decision: "accepted", reason: null });
 
-  // Remove finding from list and refresh views
+  // Remove from list and update UI
   findings.delete(finding.id);
-  findingsTreeProvider.refresh(Array.from(findings.values()));
-  statusTreeProvider.refresh();
+  dashboardProvider.syncFindings();
 
   vscode.window.showInformationMessage("Patch applied successfully.");
 }
