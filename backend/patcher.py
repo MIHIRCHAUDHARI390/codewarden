@@ -137,7 +137,7 @@ def generate_patch(finding: Finding, original: str, attempt: int,
 
 def call_llm(body: dict, model: str) -> dict:
     """Call Mistral API and return parsed JSON response."""
-    key = os.environ.get("MISTRAL_API_KEY")
+    key = (os.environ.get("MISTRAL_API_KEY") or "").strip().strip('"').strip("'")
     if not key:
         raise PatchError("MISTRAL_API_KEY is not set.")
 

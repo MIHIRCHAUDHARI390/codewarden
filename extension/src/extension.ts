@@ -1,3 +1,4 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 
@@ -62,6 +63,9 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
           break;
         case "saveApiKey":
           await saveApiKey(msg.apiKey);
+          break;
+        case "startBackend":
+          await startBackend();
           break;
         case "refreshHealth":
           await this.syncHealth();
@@ -396,6 +400,33 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
       border-radius: 6px;
       margin-top: 8px;
     }
+    /* Offline Startup Card */
+    .offline-card {
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+    .btn-start {
+      background: #10b981;
+      color: #ffffff;
+      margin-top: 8px;
+      margin-bottom: 0;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
+      animation: pulse-glow 2s infinite;
+    }
+    .btn-start:hover {
+      background: #059669;
+    }
+    @keyframes pulse-glow {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+      70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
   </style>
 </head>
 <body>
@@ -415,6 +446,21 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
       <div id="statusTitle" class="status-title">System Ready</div>
       <div id="statusDesc" class="status-desc">Click Scan Workspace to check for vulnerabilities</div>
     </div>
+  </div>
+
+  <!-- Offline 1-Click Startup Card -->
+  <div id="backendOfflineCard" class="offline-card" style="display: none;">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 16px;">⚠️</span>
+      <div style="flex: 1;">
+        <div style="font-weight: 600; font-size: 12px; color: var(--warning);">Backend is Offline</div>
+        <div style="font-size: 11px; color: var(--muted);">Server needs to run for scans & AI fixes</div>
+      </div>
+    </div>
+    <button id="startBackendBtn" class="btn btn-start">
+      <span>🚀</span>
+      <span>1-Click Start Backend Server</span>
+    </button>
   </div>
 
   <!-- Mistral API Key Input Box ("Dabba") -->
@@ -441,9 +487,10 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
 
   <!-- System Health Badges -->
   <div class="health-row">
-    <div id="pillBackend" class="pill">Backend: Checking...</div>
+    <div id="pillBackend" class="pill" title="Click to start backend" style="cursor: pointer;">Backend: Checking...</div>
     <div id="pillDocker" class="pill">Sandbox: Checking...</div>
     <div id="pillModel" class="pill">codestral-latest</div>
+    <div id="restartBtn" class="pill" title="Restart backend" style="cursor: pointer;">🔄 Restart</div>
   </div>
 
   <!-- Findings Section -->
@@ -466,6 +513,9 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
     const statusCard = document.getElementById('statusCard');
     const statusTitle = document.getElementById('statusTitle');
     const statusDesc = document.getElementById('statusDesc');
+    const backendOfflineCard = document.getElementById('backendOfflineCard');
+    const startBackendBtn = document.getElementById('startBackendBtn');
+    const restartBtn = document.getElementById('restartBtn');
     const keyBadge = document.getElementById('keyBadge');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const saveKeyBtn = document.getElementById('saveKeyBtn');
@@ -478,6 +528,15 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
     const findingsCount = document.getElementById('findingsCount');
 
     // Button Listeners
+    startBackendBtn?.addEventListener('click', () => {
+      vscode.postMessage({ command: 'startBackend' });
+    });
+    restartBtn?.addEventListener('click', () => {
+      vscode.postMessage({ command: 'startBackend' });
+    });
+    pillBackend?.addEventListener('click', () => {
+      vscode.postMessage({ command: 'startBackend' });
+    });
     scanWsBtn.addEventListener('click', () => {
       vscode.postMessage({ command: 'scanWorkspace' });
     });
@@ -529,10 +588,12 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
 
     function updateHealth(h) {
       if (h.online) {
+        if (backendOfflineCard) backendOfflineCard.style.display = 'none';
         pillBackend.textContent = 'Backend: Online';
         pillBackend.className = 'pill active';
       } else {
-        pillBackend.textContent = 'Backend: Offline';
+        if (backendOfflineCard) backendOfflineCard.style.display = 'block';
+        pillBackend.textContent = 'Backend: Offline (Click to Start)';
         pillBackend.className = 'pill';
       }
 
@@ -613,6 +674,8 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
 
 export function activate(context: vscode.ExtensionContext) {
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+  statusBar.command = "securityGuard.openDashboard";
+  statusBar.tooltip = "CodeWarden: Click to open Security Guard dashboard";
   setStatus("idle");
   statusBar.show();
 
@@ -621,6 +684,10 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     diagnostics, output, statusBar,
     vscode.window.registerWebviewViewProvider(CodeWardenDashboardProvider.viewType, dashboardProvider),
+    vscode.commands.registerCommand("securityGuard.openDashboard", async () => {
+      await vscode.commands.executeCommand("workbench.view.extension.codewarden-sidebar");
+    }),
+    vscode.commands.registerCommand("securityGuard.startBackend", startBackend),
     vscode.commands.registerCommand("securityGuard.scanFile", scanActiveFile),
     vscode.commands.registerCommand("securityGuard.scanWorkspace", scanWorkspace),
     vscode.commands.registerCommand("securityGuard.generatePatch", generatePatch),
@@ -638,11 +705,79 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
+// ---------------- Backend Launcher ----------------
+
+function findProjectRoot(): string {
+  const folders = vscode.workspace.workspaceFolders || [];
+  for (const f of folders) {
+    let current = f.uri.fsPath;
+    for (let i = 0; i < 6; i++) {
+      if (
+        fs.existsSync(path.join(current, "start.bat")) ||
+        fs.existsSync(path.join(current, "backend", "main.py"))
+      ) {
+        return current;
+      }
+      const parent = path.dirname(current);
+      if (!parent || parent === current) break;
+      current = parent;
+    }
+  }
+
+  const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
+  if (activeFile) {
+    let current = path.dirname(activeFile);
+    for (let i = 0; i < 6; i++) {
+      if (
+        fs.existsSync(path.join(current, "start.bat")) ||
+        fs.existsSync(path.join(current, "backend", "main.py"))
+      ) {
+        return current;
+      }
+      const parent = path.dirname(current);
+      if (!parent || parent === current) break;
+      current = parent;
+    }
+  }
+
+  return folders[0]?.uri.fsPath || "C:\\Users\\rahul\\codewarden";
+}
+
+async function startBackend() {
+  let terminal = vscode.window.terminals.find((t) => t.name === "CodeWarden Backend");
+  if (!terminal) {
+    terminal = vscode.window.createTerminal("CodeWarden Backend");
+  }
+  terminal.show(false);
+
+  dashboardProvider.setStatus("scanning", "Starting backend server...");
+
+  const root = findProjectRoot();
+  const startBat = path.join(root, "start.bat");
+  const backendDir = path.join(root, "backend");
+
+  if (process.platform === "win32") {
+    terminal.sendText(`cd "${root}"; if (Test-Path "${startBat}") { & "${startBat}" } else { cd "${backendDir}"; .\\.venv\\Scripts\\uvicorn.exe main:app --host 127.0.0.1 --port 8765 --reload }`);
+  } else {
+    const startSh = path.join(root, "start.sh");
+    terminal.sendText(`cd "${root}"; if [ -f "${startSh}" ]; then "${startSh}"; else cd "${backendDir}" && ./.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8765 --reload; fi`);
+  }
+
+  vscode.window.showInformationMessage("CodeWarden: Starting backend server in terminal...");
+
+  for (const delay of [2500, 5000, 8000, 12000]) {
+    setTimeout(async () => {
+      await dashboardProvider.syncHealth();
+    }, delay);
+  }
+}
+
 // ---------------- API Key Management ----------------
 
 async function saveApiKey(newKey: string) {
   try {
-    await config().update("apiKey", newKey, vscode.ConfigurationTarget.Global);
+    const cleanKey = newKey.trim().replace(/^["']|["']$/g, "");
+    await config().update("apiKey", cleanKey, vscode.ConfigurationTarget.Global);
     dashboardProvider.syncApiKey();
     await dashboardProvider.syncHealth();
     vscode.window.showInformationMessage("Mistral API key saved successfully!");
@@ -656,9 +791,15 @@ async function saveApiKey(newKey: string) {
 async function openFindingById(findingId: string) {
   const f = findings.get(findingId);
   if (!f) return;
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) return;
-  const uri = vscode.Uri.joinPath(folder.uri, f.file);
+  const root = findProjectRoot();
+  let fileFsPath = path.isAbsolute(f.file) ? f.file : path.join(root, f.file);
+  if (!fs.existsSync(fileFsPath)) {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (ws && fs.existsSync(path.join(ws, f.file))) {
+      fileFsPath = path.join(ws, f.file);
+    }
+  }
+  const uri = vscode.Uri.file(fileFsPath);
   try {
     const doc = await vscode.workspace.openTextDocument(uri);
     const editor = await vscode.window.showTextDocument(doc);
@@ -782,7 +923,8 @@ async function runPatchForFinding(finding: Finding) {
 
   const maxRetries = config().get<number>("maxRetries") ?? 3;
   const model = config().get<string>("model") || undefined;
-  const apiKey = config().get<string>("apiKey") || undefined;
+  const rawKey = config().get<string>("apiKey") || "";
+  const apiKey = rawKey.trim().replace(/^["']|["']$/g, "") || undefined;
 
   setStatus("patching");
   dashboardProvider.setStatus("patching", `Patching ${finding.class.replace(/_/g, " ")} & verifying in Docker...`);

@@ -12,7 +12,7 @@ if env_path.exists():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip())
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 from fastapi import FastAPI, HTTPException
 
@@ -61,8 +61,8 @@ def scan_files(req: ScanRequest):
 
 @app.post("/patch", response_model=PatchResponse)
 def patch(req: PatchRequest):
-    if req.api_key:
-        os.environ["MISTRAL_API_KEY"] = req.api_key
+    if req.api_key and req.api_key.strip():
+        os.environ["MISTRAL_API_KEY"] = req.api_key.strip().strip('"').strip("'")
     run = db.get_run(req.run_id)
     if not run:
         raise HTTPException(404, "Unknown run_id")

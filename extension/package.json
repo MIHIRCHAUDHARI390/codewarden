@@ -34,6 +34,16 @@
     },
     "commands": [
       {
+        "command": "securityGuard.openDashboard",
+        "title": "Security Guard: Open Dashboard",
+        "category": "CodeWarden"
+      },
+      {
+        "command": "securityGuard.startBackend",
+        "title": "Security Guard: Start Backend Server (1-Click)",
+        "category": "CodeWarden"
+      },
+      {
         "command": "securityGuard.scanFile",
         "title": "Security Guard: Scan Active File",
         "category": "CodeWarden"
