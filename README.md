@@ -1,6 +1,6 @@
 # CodeWarden - Your AI Security Guard for Python
 
-> 🚀 **Quick Start Guide:** [START.md - शुरू करने की 1-Click पूरी गाइड](./START.md)
+> 🚀 **Quick Start Guide:** [START.md](./START.md)
 >
 > Nothing reaches you unless it passed objective checks. Nothing changes your code unless you approve it.
 
