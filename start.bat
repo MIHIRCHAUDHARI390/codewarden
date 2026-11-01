@@ -37,6 +37,14 @@ if %errorlevel% neq 0 (
 :: 3. Start FastAPI Backend Server
 echo.
 echo [3/3] Starting CodeWarden Backend (port 8765)...
+
+:: Free port 8765 if previously in use
+for /f "tokens=5" %%p in ('netstat -aon ^| findstr :8765 ^| findstr LISTENING') do (
+    echo Port 8765 is in use by PID %%p. Stopping old instance...
+    taskkill /F /PID %%p >nul 2>&1
+    timeout /t 1 /nobreak >nul
+)
+
 cd backend
 if not exist ".venv\Scripts\uvicorn.exe" (
     echo Creating virtual environment...

@@ -744,6 +744,17 @@ function findProjectRoot(): string {
 }
 
 async function startBackend() {
+  // Check if backend is already healthy
+  try {
+    const url = (config().get<string>("backendUrl") || "http://127.0.0.1:8765") + "/health";
+    const res = await fetch(url);
+    if (res.ok) {
+      vscode.window.showInformationMessage("CodeWarden: Backend server is already running and online!");
+      await dashboardProvider.syncHealth();
+      return;
+    }
+  } catch {}
+
   let terminal = vscode.window.terminals.find((t) => t.name === "CodeWarden Backend");
   if (!terminal) {
     terminal = vscode.window.createTerminal("CodeWarden Backend");

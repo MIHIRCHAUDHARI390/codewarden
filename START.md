@@ -214,6 +214,10 @@ code --install-extension codewarden-0.1.0.vsix --force
 ```
 Uske baad VS Code me `Ctrl + Shift + P` -> `Developer: Reload Window` karein.
 
+### Q5: "[WinError 10013] An attempt was made to access a socket..." error kyu aaya?
+**Reason:** Port `8765` par pehle se ek backend process (jaise background uvicorn) chal raha tha. Windows par jab koi port already occupied ho, toh naya server shuru hone par `WinError 10013` deta hai.  
+**Fix:** Humne `start.bat` aur `start.ps1` ko update kar diya hai. Ab yeh script automatically port `8765` ko scan karta hai, purane zombie process ko gracefully stop karta hai, aur naya server smoothly start kar deta hai. Agar backend already healthy hai, toh sidebar button use restart karne ki bajaye turant "Online" declare kar deta hai!
+
 ---
 
 🎉 **Badhaai ho! Aapka CodeWarden system ab 100% ready hai!**

@@ -39,6 +39,17 @@ if (-not $imageInspect) {
 # 3. Start Backend
 Write-Host ""
 Write-Host "[3/3] Launching CodeWarden Backend..." -ForegroundColor Yellow
+
+# Free port 8765 if already bound
+$portProcesses = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+foreach ($conn in $portProcesses) {
+    if ($conn.OwningProcess) {
+        Write-Host "Port 8765 is occupied by PID $($conn.OwningProcess). Stopping old instance..." -ForegroundColor Yellow
+        Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+}
+
 Set-Location "$rootDir\backend"
 
 if (-not (Test-Path ".\.venv\Scripts\uvicorn.exe")) {
