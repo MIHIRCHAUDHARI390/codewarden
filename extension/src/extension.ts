@@ -135,7 +135,8 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
   }
 
   private getHtml(): string {
-    return `<!DOCTYPE html>
+    return `
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -143,367 +144,234 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
   <title>CodeWarden</title>
   <style>
     :root {
-      --bg: var(--vscode-sideBar-background, #18181b);
-      --card-bg: var(--vscode-editor-background, #202024);
-      --text: var(--vscode-foreground, #e4e4e7);
-      --muted: var(--vscode-descriptionForeground, #a1a1aa);
-      --accent: var(--vscode-button-background, #3b82f6);
-      --accent-hover: var(--vscode-button-hoverBackground, #2563eb);
-      --btn-fg: var(--vscode-button-foreground, #ffffff);
-      --border: var(--vscode-widget-border, #2e2e34);
-      --danger: #ef4444;
-      --warning: #f59e0b;
-      --info: #3b82f6;
-      --success: #10b981;
+      --bg: var(--vscode-sideBar-background);
+      --card-bg: var(--vscode-editor-background);
+      --text: var(--vscode-foreground);
+      --muted: var(--vscode-descriptionForeground);
+      --border: var(--vscode-widget-border, rgba(128,128,128,0.35));
+      --hover: color-mix(in srgb, var(--text) 6%, transparent);
+      --accent: var(--vscode-button-background);
+      --accent-hover: var(--vscode-button-hoverBackground);
+      --btn-fg: var(--vscode-button-foreground);
+      --success: var(--vscode-testing-iconPassed, #89d185);
+      --warning: var(--vscode-charts-yellow, #d7ba7d);
+      --danger: var(--vscode-errorForeground, #f14c4c);
+      --info: var(--vscode-textLink-foreground, #3794ff);
+      --font: var(--vscode-font-family, -apple-system, sans-serif);
+      --mono: var(--vscode-editor-font-family, monospace);
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
       background: var(--bg);
       color: var(--text);
-      font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-      font-size: var(--vscode-font-size, 13px);
-      padding: 12px;
-      line-height: 1.4;
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
     }
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding-bottom: 12px;
+    body { padding: 12px; }
+
+    /* ---------- Header ---------- */
+    .masthead {
+      display: flex; align-items: center; gap: 8px;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
       border-bottom: 1px solid var(--border);
-      margin-bottom: 12px;
     }
-    .header h2 {
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-      color: var(--text);
-    }
-    .shield-icon {
-      width: 20px;
-      height: 20px;
-      fill: none;
-      stroke: var(--accent);
-      stroke-width: 2;
+    .masthead svg { width: 18px; height: 18px; flex-shrink: 0; }
+    .shield { fill: var(--info); }
+    .mark { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
+    .mark em {
+      font-style: normal; color: var(--muted); font-weight: 500;
+      margin-left: 6px; font-size: 12px;
     }
 
-    /* Status Banner Card */
-    .status-card {
-      background: var(--card-bg);
+    /* ---------- Status ---------- */
+    .status-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px;
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 12px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      transition: all 0.2s ease;
-    }
-    .status-card.idle { border-left: 3px solid var(--success); }
-    .status-card.scanning { border-left: 3px solid var(--accent); }
-    .status-card.patching { border-left: 3px solid var(--warning); }
-
-    .pulse-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--success);
-      flex-shrink: 0;
-    }
-    .status-card.scanning .pulse-dot {
-      background: var(--accent);
-      animation: pulse 1s infinite alternate;
-    }
-    .status-card.patching .pulse-dot {
-      background: var(--warning);
-      animation: pulse 0.7s infinite alternate;
-    }
-    @keyframes pulse {
-      from { transform: scale(0.9); opacity: 0.5; }
-      to { transform: scale(1.3); opacity: 1; }
-    }
-    .status-info { flex: 1; min-width: 0; }
-    .status-title { font-weight: 600; font-size: 12px; text-transform: uppercase; }
-    .status-desc { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-    /* API Key Box */
-    .key-box {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 12px;
-    }
-    .box-title {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      text-transform: uppercase;
-      margin-bottom: 6px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .key-row {
-      display: flex;
-      gap: 6px;
-      margin-top: 4px;
-    }
-    .key-input {
-      flex: 1;
-      background: var(--vscode-input-background, #18181b);
-      color: var(--vscode-input-foreground, #fff);
-      border: 1px solid var(--vscode-input-border, #3f3f46);
       border-radius: 4px;
+      background: var(--card-bg);
+      margin-bottom: 12px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .status-card.idle .dot { background: var(--success); }
+    .status-card.scanning .dot { background: var(--info); animation: blink 1s infinite; }
+    .status-card.patching .dot { background: var(--warning); animation: blink 0.8s infinite; }
+    @keyframes blink { 50% { opacity: 0.3; } }
+    .status-info { flex: 1; min-width: 0; }
+    .status-title { font-size: 12px; font-weight: 600; color: var(--text); }
+    .status-desc {
+      font-size: 11px; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* remove dependency on pulsing dot layout used by JS className switching */
+    .status-card .dot { display: block; }
+
+    /* ---------- Offline card ---------- */
+    .offline-card {
+      border: 1px solid var(--warning);
+      border-radius: 4px;
+      background: color-mix(in srgb, var(--warning) 8%, transparent);
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    .offline-title { font-weight: 600; font-size: 12px; color: var(--warning); }
+    .offline-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    /* ---------- Controls ---------- */
+    .section-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--muted); font-weight: 600; margin: 12px 0 6px;
+    }
+    .key-row { display: flex; gap: 6px; }
+    .key-input {
+      flex: 1; min-width: 0;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, var(--border));
+      border-radius: 3px;
       padding: 5px 8px;
       font-size: 12px;
+      font-family: var(--mono);
       outline: none;
     }
-    .key-input:focus {
-      border-color: var(--accent);
-    }
-    .badge {
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 10px;
-      font-weight: 600;
-    }
-    .badge-ok { background: rgba(16, 185, 129, 0.2); color: var(--success); }
-    .badge-missing { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+    .key-input:focus { border-color: var(--accent); }
 
-    /* Action Buttons */
     .btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      width: 100%;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
       background: var(--accent);
       color: var(--btn-fg);
-      border: none;
-      border-radius: 4px;
-      padding: 8px 12px;
-      font-size: 12px;
-      font-weight: 600;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      padding: 6px 10px;
+      font-size: 12px; font-weight: 500;
       cursor: pointer;
-      transition: background 0.15s ease;
-      margin-bottom: 6px;
+      font-family: inherit;
     }
     .btn:hover { background: var(--accent-hover); }
-    .btn-secondary {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text);
-    }
-    .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.05);
-    }
-    .btn-sm {
-      width: auto;
-      padding: 4px 8px;
-      font-size: 11px;
-      margin-bottom: 0;
-    }
+    .btn-secondary { background: transparent; border-color: var(--border); color: var(--text); }
+    .btn-secondary:hover { background: var(--hover); }
+    .btn-sm { padding: 4px 9px; font-size: 11px; }
+    .btn-block { width: 100%; }
+    .btn-start { margin-bottom: 0; }
 
-    /* System Health Pills */
-    .health-row {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 12px;
-      flex-wrap: wrap;
-    }
+    /* ---------- Health ---------- */
+    .health-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
     .pill {
-      font-size: 10px;
-      padding: 3px 6px;
-      border-radius: 4px;
-      background: rgba(255, 255, 255, 0.05);
+      font-size: 11px; padding: 2px 8px;
+      border-radius: 10px;
       border: 1px solid var(--border);
       color: var(--muted);
-      display: flex;
-      align-items: center;
-      gap: 4px;
+      white-space: nowrap;
     }
-    .pill.active { color: var(--success); border-color: rgba(16, 185, 129, 0.3); }
+    .pill.active { color: var(--success); border-color: var(--success); }
+    .pill[style*="cursor"] { cursor: pointer; }
 
-    /* Findings List */
-    .section-header {
-      font-size: 12px;
-      font-weight: 600;
-      margin: 12px 0 8px 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
+    /* ---------- Findings ---------- */
+    .findings-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin: 16px 0 8px;
     }
+    .findings-head .count { font-size: 11px; color: var(--muted); }
     .finding-card {
-      background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 10px;
+      border-radius: 4px;
+      background: var(--card-bg);
+      padding: 10px 12px;
       margin-bottom: 8px;
-      transition: border-color 0.15s ease;
     }
-    .finding-card:hover { border-color: var(--accent); }
-    .finding-card.critical { border-left: 3px solid var(--danger); }
-    .finding-card.high { border-left: 3px solid var(--danger); }
+    .finding-card.high, .finding-card.critical { border-left: 3px solid var(--danger); }
     .finding-card.medium { border-left: 3px solid var(--warning); }
     .finding-card.low { border-left: 3px solid var(--info); }
-
-    .card-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 4px;
-    }
+    .card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     .sev-tag {
-      font-size: 9px;
-      font-weight: 700;
-      padding: 1px 5px;
-      border-radius: 3px;
-      text-transform: uppercase;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+      padding: 1px 7px; border-radius: 9px;
+      border: 1px solid var(--border); color: var(--muted);
     }
-    .sev-critical, .sev-high { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
-    .sev-medium { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
-    .sev-low { background: rgba(59, 130, 246, 0.2); color: var(--info); }
+    .sev-tag.sev-high, .sev-tag.sev-critical { color: var(--danger); border-color: var(--danger); }
+    .sev-tag.sev-medium { color: var(--warning); border-color: var(--warning); }
+    .sev-tag.sev-low { color: var(--info); border-color: var(--info); }
+    .file-loc { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+    .vuln-title { font-weight: 600; font-size: 12px; margin: 7px 0 2px; text-transform: capitalize; }
+    .vuln-msg { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+    .card-actions { display: flex; gap: 6px; }
+    .card-actions .btn { flex: 1; }
 
-    .file-loc {
-      font-size: 11px;
-      color: var(--muted);
-      font-family: monospace;
-    }
-    .vuln-title {
-      font-weight: 600;
-      font-size: 12px;
-      margin-bottom: 4px;
-    }
-    .vuln-msg {
-      font-size: 11px;
-      color: var(--muted);
-      margin-bottom: 8px;
-      line-height: 1.3;
-    }
-    .card-actions {
-      display: flex;
-      gap: 6px;
-    }
-    .card-actions .btn {
-      flex: 1;
-      padding: 4px 6px;
-      font-size: 11px;
-      margin-bottom: 0;
-    }
     .empty-state {
-      text-align: center;
-      padding: 24px 12px;
-      color: var(--muted);
-      border: 1px dashed var(--border);
-      border-radius: 6px;
-      margin-top: 8px;
+      text-align: center; color: var(--muted);
+      padding: 28px 12px;
+      border: 1px dashed var(--border); border-radius: 4px;
     }
-    /* Offline Startup Card */
-    .offline-card {
-      background: rgba(245, 158, 11, 0.08);
-      border: 1px solid rgba(245, 158, 11, 0.35);
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 12px;
-    }
-    .btn-start {
-      background: #10b981;
-      color: #ffffff;
-      margin-top: 8px;
-      margin-bottom: 0;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.3px;
-      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
-      animation: pulse-glow 2s infinite;
-    }
-    .btn-start:hover {
-      background: #059669;
-    }
-    @keyframes pulse-glow {
-      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
-      70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
-    }
+    .empty-state .big { font-size: 15px; margin-bottom: 4px; }
+    .empty-state .hint { font-size: 11px; margin-top: 2px; }
   </style>
 </head>
 <body>
 
-  <div class="header">
-    <svg class="shield-icon" viewBox="0 0 24 24">
-      <path d="M12 2L3.5 5.8V11.5C3.5 16.8 7.2 21.4 12 22.8C16.8 21.4 20.5 16.8 20.5 11.5V5.8L12 2Z"/>
-      <circle cx="12" cy="11.5" r="2"/>
+  <div class="masthead">
+    <svg class="shield" viewBox="0 0 24 24">
+      <path d="M12 2 3.5 5.8v5.7c0 5.3 3.7 9.9 8.5 11.3 4.8-1.4 8.5-6 8.5-11.3V5.8L12 2Z"/>
+      <circle cx="12" cy="11.5" r="2" fill="var(--bg)"/>
     </svg>
-    <h2>CodeWarden Guard</h2>
+    <div class="mark">CodeWarden<em>Security Guard</em></div>
   </div>
 
-  <!-- Live Status Banner -->
-  <div id="statusCard" class="status-card idle">
-    <div class="pulse-dot"></div>
+  <!-- Live Status -->
+  <div id="statusCard" class="status-card idle status-row">
+    <div class="dot"></div>
     <div class="status-info">
       <div id="statusTitle" class="status-title">System Ready</div>
-      <div id="statusDesc" class="status-desc">Click Scan Workspace to check for vulnerabilities</div>
+      <div id="statusDesc" class="status-desc">Scan a workspace to check for vulnerabilities</div>
     </div>
   </div>
 
-  <!-- Offline 1-Click Startup Card -->
-  <div id="backendOfflineCard" class="offline-card" style="display: none;">
-    <div style="display: flex; align-items: center; gap: 8px;">
-      <span style="font-size: 16px;">⚠️</span>
-      <div style="flex: 1;">
-        <div style="font-weight: 600; font-size: 12px; color: var(--warning);">Backend is Offline</div>
-        <div style="font-size: 11px; color: var(--muted);">Server needs to run for scans & AI fixes</div>
-      </div>
-    </div>
-    <button id="startBackendBtn" class="btn btn-start">
-      <span>🚀</span>
-      <span>1-Click Start Backend Server</span>
-    </button>
-  </div>
-
-  <!-- Mistral API Key Input Box ("Dabba") -->
-  <div class="key-box">
-    <div class="box-title">
-      <span>Mistral AI Key</span>
-      <span id="keyBadge" class="badge badge-missing">Missing</span>
-    </div>
-    <div class="key-row">
-      <input type="password" id="apiKeyInput" class="key-input" placeholder="mstrl_..." />
-      <button id="saveKeyBtn" class="btn btn-sm">Save</button>
+  <!-- Offline startup -->
+  <div id="backendOfflineCard" class="offline-card" style="display:none">
+    <div class="offline-title">Backend is offline</div>
+    <div class="offline-sub">The local server must be running for scans &amp; AI fixes.</div>
+    <div style="margin-top:8px">
+      <button id="startBackendBtn" class="btn btn-start">Start backend server</button>
     </div>
   </div>
 
-  <!-- Action Buttons -->
-  <button id="scanWsBtn" class="btn">
-    <span>🛡️</span>
-    <span>Scan Entire Workspace</span>
-  </button>
-  <button id="scanFileBtn" class="btn btn-secondary">
-    <span>📄</span>
-    <span>Scan Active File</span>
-  </button>
+  <!-- API key -->
+  <div class="section-label">Mistral API key</div>
+  <div class="key-row">
+    <input type="password" id="apiKeyInput" class="key-input" placeholder="mstrl_...">
+    <button id="saveKeyBtn" class="btn btn-sm">Save</button>
+  </div>
+  <div style="margin-top:4px">
+    <span id="keyBadge" class="pill">Missing</span>
+  </div>
 
-  <!-- System Health Badges -->
+  <!-- Actions -->
+  <div class="section-label">Actions</div>
+  <button id="scanWsBtn" class="btn btn-block">Scan entire workspace</button>
+  <div style="height:6px"></div>
+  <button id="scanFileBtn" class="btn btn-secondary btn-block">Scan active file</button>
+
+  <!-- Health -->
+  <div class="section-label">Environment</div>
   <div class="health-row">
-    <div id="pillBackend" class="pill" title="Click to start backend" style="cursor: pointer;">Backend: Checking...</div>
-    <div id="pillDocker" class="pill">Sandbox: Checking...</div>
-    <div id="pillModel" class="pill">codestral-latest</div>
-    <div id="restartBtn" class="pill" title="Restart backend" style="cursor: pointer;">🔄 Restart</div>
+    <span id="pillBackend" class="pill" title="Click to start backend" style="cursor:pointer">Backend: Checking…</span>
+    <span id="pillDocker" class="pill">Sandbox: Checking…</span>
+    <span id="pillModel" class="pill">codestral-latest</span>
+    <span id="restartBtn" class="pill" title="Restart backend" style="cursor:pointer">Restart</span>
   </div>
 
-  <!-- Findings Section -->
-  <div class="section-header">
-    <span>Security Findings</span>
-    <span id="findingsCount" style="color: var(--muted); font-size: 11px;">0 detected</span>
+  <!-- Findings -->
+  <div class="findings-head">
+    <span class="section-label" style="margin:0">Security findings</span>
+    <span id="findingsCount" class="count">0 detected</span>
   </div>
-
   <div id="findingsList">
     <div class="empty-state">
-      <div style="font-size: 20px; margin-bottom: 6px;">🛡️</div>
-      <div>No vulnerabilities scanned yet</div>
-      <div style="font-size: 11px; margin-top: 4px;">Press "Scan Entire Workspace" above</div>
+      <div class="big">No scan yet</div>
+      <div>Scanned issues will appear here</div>
+      <div class="hint">Press “Scan entire workspace” to begin</div>
     </div>
   </div>
 
@@ -570,14 +438,14 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
     });
 
     function updateStatus(status, message) {
-      statusCard.className = 'status-card ' + status;
+      statusCard.className = 'status-card ' + status + ' status-row';
       if (status === 'scanning') {
-        statusTitle.textContent = 'Scanning Workspace...';
-        statusDesc.textContent = message || 'Running Bandit, AST, Secrets & pip-audit...';
+        statusTitle.textContent = 'Scanning workspace…';
+        statusDesc.textContent = message || 'Running Bandit, AST, secrets &amp; pip-audit…';
         scanWsBtn.disabled = true;
       } else if (status === 'patching') {
-        statusTitle.textContent = 'Generating Patch...';
-        statusDesc.textContent = message || 'AI fix generation & Docker sandbox verification...';
+        statusTitle.textContent = 'Generating patch…';
+        statusDesc.textContent = message || 'AI fix generation &amp; sandbox verification…';
         scanWsBtn.disabled = true;
       } else {
         statusTitle.textContent = 'System Ready';
@@ -593,15 +461,15 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
         pillBackend.className = 'pill active';
       } else {
         if (backendOfflineCard) backendOfflineCard.style.display = 'block';
-        pillBackend.textContent = 'Backend: Offline (Click to Start)';
+        pillBackend.textContent = 'Backend: Offline (click to start)';
         pillBackend.className = 'pill';
       }
 
       if (h.sandbox) {
-        pillDocker.textContent = 'Docker: Ready';
+        pillDocker.textContent = 'Sandbox: Ready';
         pillDocker.className = 'pill active';
       } else {
-        pillDocker.textContent = 'Docker: Missing';
+        pillDocker.textContent = 'Sandbox: Missing';
         pillDocker.className = 'pill';
       }
 
@@ -611,11 +479,11 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
     function updateApiKey(key) {
       if (key) {
         keyBadge.textContent = 'Configured';
-        keyBadge.className = 'badge badge-ok';
+        keyBadge.className = 'pill active';
         apiKeyInput.value = key;
       } else {
         keyBadge.textContent = 'Missing';
-        keyBadge.className = 'badge badge-missing';
+        keyBadge.className = 'pill';
       }
     }
 
@@ -624,11 +492,9 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
       if (!items || items.length === 0) {
         findingsList.innerHTML = \`
           <div class="empty-state">
-            <div style="font-size: 20px; margin-bottom: 6px;">✅</div>
-            <div>No vulnerabilities detected</div>
-            <div style="font-size: 11px; margin-top: 4px;">Workspace code is clean!</div>
-          </div>
-        \`;
+            <div class="big">No vulnerabilities found</div>
+            <div>Workspace code is clean</div>
+          </div>\`;
         return;
       }
 
@@ -647,11 +513,10 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
             <div class="vuln-title">\${prettyClass}</div>
             <div class="vuln-msg">\${f.message}</div>
             <div class="card-actions">
-              <button class="btn btn-secondary" onclick="openItem('\${f.id}')">🔍 View</button>
-              <button class="btn" onclick="patchItem('\${f.id}')">⚡ Fix with AI</button>
+              <button class="btn btn-secondary" onclick="openItem('\${f.id}')">View</button>
+              <button class="btn" onclick="patchItem('\${f.id}')">Fix with AI</button>
             </div>
-          </div>
-        \`;
+          </div>\`;
       }).join('');
     }
 
@@ -666,7 +531,9 @@ class CodeWardenDashboardProvider implements vscode.WebviewViewProvider {
     vscode.postMessage({ command: 'ready' });
   </script>
 </body>
-</html>`;
+</html>
+
+`;
   }
 }
 
@@ -988,12 +855,31 @@ async function runPatchForFinding(finding: Finding) {
 
   const ev = res.evidence;
   output.clear();
-  output.appendLine(`Finding ${finding.id}  (${finding.class}, ${finding.severity})`);
-  output.appendLine(`\nWhat was wrong:  ${ev.what_was_wrong}`);
-  output.appendLine(`Why it matters:  ${ev.why_it_matters}`);
-  output.appendLine(`What changed:    ${ev.what_changed}`);
-  output.appendLine(`\nChecks:\n  ${ev.checks_passed.join("\n  ")}`);
-  if (res.patch.regression_test) output.appendLine(`\nRegression test added: ${res.patch.regression_test.path}`);
+  const rule = "=".repeat(56);
+  output.appendLine(rule);
+  output.appendLine(`  VERIFIED SECURITY FIX  ·  ${finding.id}`);
+  output.appendLine(rule);
+  output.appendLine(`Vulnerability : ${finding.class.replace(/_/g, " ")}  (${finding.severity})`);
+  output.appendLine(`File          : ${finding.file}:${finding.line_start}`);
+  output.appendLine("");
+  output.appendLine("What was wrong");
+  output.appendLine("───────────────");
+  output.appendLine(`  ${ev.what_was_wrong}`);
+  output.appendLine("");
+  output.appendLine("Why it matters");
+  output.appendLine("───────────────");
+  output.appendLine(`  ${ev.why_it_matters}`);
+  output.appendLine("");
+  output.appendLine("What changed");
+  output.appendLine("────────────");
+  output.appendLine(`  ${ev.what_changed}`);
+  output.appendLine("");
+  output.appendLine("Verification checks");
+  output.appendLine("───────────────────");
+  ev.checks_passed.forEach((c) => output.appendLine(`  ✓ ${c}`));
+  if (res.patch.regression_test) output.appendLine("");
+  if (res.patch.regression_test) output.appendLine(`Regression test added: ${res.patch.regression_test.path}`);
+  output.appendLine(rule);
   output.show(true);
 
   const choice = await vscode.window.showInformationMessage(

@@ -12,20 +12,59 @@ OK = {"pass", "fail_as_expected", "not_applicable", "no_baseline_tests"}
 SKIP_DIRS = shutil.ignore_patterns(".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache")
 
 
+def _resolve_scope(project_root: Path, finding_file: str) -> tuple[str, str]:
+    """Return (scope_rel, rel_finding): the app root (a dir with tests/ or pytest.ini)
+    containing the finding, and the finding path relative to that scope.
+
+    The pipeline may be run from a monorepo root (project_root) while the finding lives
+    in a sub-project, e.g. demo_apps/vulnapp/app/db.py. Test execution must be scoped
+    to that sub-project so pytest runs against the app's own tests and imports (and
+    doesn't collect unrelated dirs like backend/tests that need deps absent from the
+    sandbox image).
+    """
+    project_root = project_root.resolve()
+    candidate = Path(finding_file)
+    file_path = candidate if candidate.is_absolute() else project_root / candidate
+    file_path = file_path.resolve()
+
+    # Strict containment: the finding must live inside project_root. Resolving first
+    # means an absolute path or one that escapes via ".." cannot land outside.
+    try:
+        file_path.relative_to(project_root)
+    except ValueError as e:
+        raise ValueError(f"finding path {finding_file} is outside project_root {project_root}") from e
+
+    cur = file_path.parent
+    scope = project_root
+    while cur.is_relative_to(project_root) and cur != project_root:
+        if (cur / "tests").is_dir() or (cur / "pytest.ini").exists():
+            scope = cur
+            break
+        cur = cur.parent
+
+    scope_rel = scope.relative_to(project_root).as_posix()
+    rel_finding = file_path.relative_to(scope).as_posix()
+    return scope_rel, rel_finding
+
+
 def verify(finding: Finding, patch: Patch, project_root: str, original: str) -> VerificationResult:
     checks: dict[str, str] = {}
     logs: list[str] = []
     tmp = Path(tempfile.mkdtemp(prefix="codewarden-"))
     try:
+        # Scope test execution to the app dir that owns the finding.
+        scope_rel, rel_finding = _resolve_scope(Path(project_root), finding.file)
+        scope_root = Path(project_root) / scope_rel if scope_rel != "." else Path(project_root)
+
         orig_dir, patched_dir = tmp / "original", tmp / "patched"
         for d, content in ((orig_dir, original), (patched_dir, patch.patched_content)):
-            shutil.copytree(project_root, d, ignore=SKIP_DIRS)
-            write(d / finding.file, content)
+            shutil.copytree(scope_root, d, ignore=SKIP_DIRS)
+            write(d / rel_finding, content)
             if patch.regression_test:
                 write(d / patch.regression_test.path, patch.regression_test.content)
 
         # 1. Patch applies cleanly to original file (no conflicts), and patch changes something.
-        on_disk = (Path(project_root) / finding.file).read_text(encoding="utf-8")
+        on_disk = (scope_root / rel_finding).read_text(encoding="utf-8")
         if on_disk.replace("\r\n", "\n") != original.replace("\r\n", "\n"):
             checks["patch_applies"] = "file_changed_since_scan"
         elif not patch.unified_diff:
@@ -77,8 +116,8 @@ def verify(finding: Finding, patch: Patch, project_root: str, original: str) -> 
             checks["existing_tests"] = "no_baseline_tests"
 
         # 6. Re-scan: the original finding is gone and nothing new appeared.
-        before = Counter((f.vuln_class, f.rule_id) for f in scan(orig_dir, [finding.file]))
-        after = Counter((f.vuln_class, f.rule_id) for f in scan(patched_dir, [finding.file]))
+        before = Counter((f.vuln_class, f.rule_id) for f in scan(orig_dir, [rel_finding]))
+        after = Counter((f.vuln_class, f.rule_id) for f in scan(patched_dir, [rel_finding]))
         key = (finding.vuln_class, finding.rule_id)
         checks["rescan_clean"] = "pass" if after[key] < before[key] else "still_reported"
         new = after - before

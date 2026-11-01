@@ -1,2 +1,4 @@
 # VULN: pyyaml 5.3.1 has a known CVE (fixed in 5.4)
-pyyaml==5.4
+# Kept vulnerable on purpose so the extension's dependency scanner (pip-audit)
+# has a finding to detect and patch.
+pyyaml==5.3.1

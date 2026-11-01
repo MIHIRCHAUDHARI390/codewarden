@@ -4,8 +4,12 @@
   "description": "Scans Python code for security bugs and proposes sandbox-verified patches.",
   "version": "0.1.0",
   "publisher": "codewarden",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Linters"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters"
+  ],
   "main": "./out/extension.js",
   "icon": "media/icon.png",
   "activationEvents": [
@@ -62,12 +66,38 @@
     "configuration": {
       "title": "Security Guard",
       "properties": {
-        "securityGuard.backendUrl": { "type": "string", "default": "http://127.0.0.1:8765" },
-        "securityGuard.apiKey": { "type": "string", "default": "", "description": "Mistral API key. If left blank, uses MISTRAL_API_KEY environment variable on backend." },
-        "securityGuard.scanOnSave": { "type": "boolean", "default": true },
-        "securityGuard.model": { "type": "string", "default": "", "description": "Mistral model id. Empty = backend default (codestral-latest)." },
-        "securityGuard.maxRetries": { "type": "number", "default": 3 },
-        "securityGuard.severityThreshold": { "type": "string", "enum": ["low", "medium", "high", "critical"], "default": "low" }
+        "securityGuard.backendUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765"
+        },
+        "securityGuard.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Mistral API key. If left blank, uses MISTRAL_API_KEY environment variable on backend."
+        },
+        "securityGuard.scanOnSave": {
+          "type": "boolean",
+          "default": true
+        },
+        "securityGuard.model": {
+          "type": "string",
+          "default": "",
+          "description": "Mistral model id. Empty = backend default (codestral-latest)."
+        },
+        "securityGuard.maxRetries": {
+          "type": "number",
+          "default": 3
+        },
+        "securityGuard.severityThreshold": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "default": "low"
+        }
       }
     }
   },
@@ -77,7 +107,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "@types/vscode": "^1.90.0",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "^4.1.0",
     "typescript": "^5.4.0"
   }
 }
