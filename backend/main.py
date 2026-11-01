@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 
 import db
 from pipeline import patch_finding
+from patcher import PatchError
 from sandbox import IMAGE
 from scanner import scan
 from schemas import DecisionRequest, Finding, PatchRequest, PatchResponse, ScanRequest, ScanResponse
@@ -70,7 +71,12 @@ def patch(req: PatchRequest):
         raise HTTPException(404, "Unknown finding_id")
     finding = Finding(**data)
     original = run["files"][finding.file]
-    return patch_finding(finding, run["project_root"], original, req.max_retries, req.model)
+    try:
+        return patch_finding(finding, run["project_root"], original, req.max_retries, req.model)
+    except PatchError as e:
+        return PatchResponse(verified=False, message=str(e))
+    except Exception as e:
+        return PatchResponse(verified=False, message=f"Pipeline error: {e}")
 
 
 @app.post("/decision")
