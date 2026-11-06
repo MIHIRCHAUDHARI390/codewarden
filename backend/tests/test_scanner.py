@@ -20,3 +20,11 @@ def test_scanner_finds_vulnerable_dependency():
     files = ["requirements.txt"]
     findings = scan(DEMO, files)
     assert any(f.vuln_class == "vulnerable_dependency" for f in findings)
+
+
+def test_scanner_safe_path_prevents_module_hijacking(tmp_path):
+    # Untrusted repo shadowing standard library or dependency modules
+    (tmp_path / "json.py").write_text("raise RuntimeError('PWNED_JSON')", encoding="utf-8")
+    (tmp_path / "sample.py").write_text("import pickle\npickle.loads(b'foo')\n", encoding="utf-8")
+    findings = scan(tmp_path, ["sample.py"])
+    assert any(f.vuln_class == "unsafe_deserialization" for f in findings)

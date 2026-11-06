@@ -1,5 +1,6 @@
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -47,9 +48,11 @@ def scan(root: Path, files: list[str]) -> list[Finding]:
 
 def run_bandit(root: Path, files: list[str]) -> list[Finding]:
     """Run Bandit on the given Python files and return findings."""
+    env = os.environ.copy()
+    env["PYTHONSAFEPATH"] = "1"
     proc = subprocess.run(
-        [sys.executable, "-m", "bandit", "-f", "json", "-q", *files],
-        cwd=root, capture_output=True, text=True,
+        [sys.executable, "-P", "-m", "bandit", "-f", "json", "-q", "--", *files],
+        cwd=root, capture_output=True, text=True, env=env,
     )
     data = json.loads(proc.stdout or "{}")
     findings = []
@@ -132,10 +135,12 @@ def _is_built_path(arg: ast.expr) -> bool:
 def run_pip_audit(root: Path) -> list[Finding]:
     """Run pip-audit on requirements.txt and return dependency findings."""
     req = root / "requirements.txt"
+    env = os.environ.copy()
+    env["PYTHONSAFEPATH"] = "1"
     proc = subprocess.run(
-        [sys.executable, "-m", "pip_audit", "-r", str(req), "--no-deps", "--disable-pip",
+        [sys.executable, "-P", "-m", "pip_audit", "-r", str(req), "--no-deps", "--disable-pip",
          "-f", "json", "--progress-spinner", "off"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     try:
         data = json.loads(proc.stdout)
